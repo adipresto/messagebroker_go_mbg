@@ -23,13 +23,17 @@ func main() {
 	}
 
 	// 2. Setup Core Component
-	_ = circuitbreaker.NewCircuitBreaker(
+	cb := circuitbreaker.NewCircuitBreaker(
 		cfg.CircuitBreaker.Threshold,
 		time.Duration(cfg.CircuitBreaker.TimeoutSeconds)*time.Second,
 	)
 	b := broker.NewBroker[string](cfg.Broker.StoragePath)
 
-	// 3. Start gRPC Server
+	// 3. Setup Dispatcher (Active Delivery)
+	disp := broker.NewDispatcher(b, cfg, cb)
+	go disp.Start()
+
+	// 4. Start gRPC Server
 	grpcServer := grpc.NewServer()
 	s := server.NewGRPCServer(b)
 	proto.RegisterBrokerServiceServer(grpcServer, s)
@@ -46,8 +50,8 @@ func main() {
 		}
 	}()
 
-	// 4. Start HTTP & Dashboard Server
-	httpServer := server.NewHTTPServer(b)
+	// 5. Start HTTP & Dashboard Server
+	httpServer := server.NewHTTPServer(b, disp)
 	
 	// Start WebSocket streaming loop in background
 	go httpServer.StartStreaming()

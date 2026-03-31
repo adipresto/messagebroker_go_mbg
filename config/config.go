@@ -18,6 +18,11 @@ type Config struct {
 		Threshold      int `yaml:"threshold"`
 		TimeoutSeconds int `yaml:"timeout_seconds"`
 	} `yaml:"circuit_breaker"`
+	Dispatcher struct {
+		Targets        []string `yaml:"targets"`
+		MaxRetries     int      `yaml:"max_retries"`
+		BaseInterval   int      `yaml:"base_interval_seconds"`
+	} `yaml:"dispatcher"`
 }
 
 func LoadConfig(path string) (*Config, error) {

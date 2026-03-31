@@ -102,6 +102,66 @@ func (b *Broker[T]) Pop() (models.Message[T], error) {
 	return msg, nil
 }
 
+// Peek melihat pesan terdepan tanpa menghapusnya
+func (b *Broker[T]) Peek() (models.Message[T], error) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if len(b.messages) == 0 {
+		var zero models.Message[T]
+		return zero, fmt.Errorf("queue is empty")
+	}
+	return b.messages[0], nil
+}
+
+// Acknowledge menghapus pesan berdasarkan ID (Commit)
+func (b *Broker[T]) Acknowledge(id string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	index := -1
+	for i, m := range b.messages {
+		if m.ID == id {
+			index = i
+			break
+		}
+	}
+
+	if index == -1 {
+		return fmt.Errorf("message %s not found", id)
+	}
+
+	// Hapus dari disk
+	if err := b.RemoveFromDisk(id); err != nil {
+		return err
+	}
+
+	// Hapus dari memori
+	b.messages = append(b.messages[:index], b.messages[index+1:]...)
+	
+	b.notify()
+	return nil
+}
+
+// Update memperbarui isi pesan di memori dan disk (misal untuk retry count)
+func (b *Broker[T]) Update(msg models.Message[T]) error {
+	// Simpan ke disk dulu
+	if err := b.SaveToDisk(msg); err != nil {
+		return err
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	for i, m := range b.messages {
+		if m.ID == msg.ID {
+			b.messages[i] = msg
+			return nil
+		}
+	}
+
+	return fmt.Errorf("message %s not found in memory", msg.ID)
+}
+
 // All tetap menggunakan iterator untuk pembacaan aman
 func (b *Broker[T]) All() iter.Seq[models.Message[T]] {
 	return func(yield func(models.Message[T]) bool) {

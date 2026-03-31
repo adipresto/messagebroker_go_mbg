@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"mbg/api/proto"
 	"mbg/models"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,9 +37,34 @@ type testContext struct {
 	// Clients
 	grpcClient proto.BrokerServiceClient
 	grpcConn   *grpc.ClientConn
+
+	// Mock Targets
+	mockServer     *httptest.Server
+	mockServerGRPC *grpc.Server
+	lastTarget     string
+	pushedMsgs     []models.Message[string]
+}
+
+type mockTargetTestServer struct {
+	proto.UnimplementedTargetServiceServer
+	tc *testContext
+}
+
+func (s *mockTargetTestServer) Deliver(ctx context.Context, req *proto.DeliveryRequest) (*proto.DeliveryResponse, error) {
+	s.tc.pushedMsgs = append(s.tc.pushedMsgs, models.Message[string]{
+		ID:      req.Id,
+		Payload: req.Payload,
+	})
+	return &proto.DeliveryResponse{Status: "SUCCESS"}, nil
 }
 
 func (c *testContext) reset() {
+	if c.mockServerGRPC != nil {
+		c.mockServerGRPC.Stop()
+		c.mockServerGRPC = nil
+	}
+	c.pushedMsgs = nil
+	c.lastTarget = ""
 	if c.grpcConn != nil {
 		c.grpcConn.Close()
 		c.grpcConn = nil
@@ -413,6 +441,183 @@ func (c *testContext) theProducerSendsTheFollowingJSONPayloadViaGRPC(doc *godog.
 	return nil
 }
 
+func (c *testContext) theBrokerHasARegisteredTarget(target string) error {
+	url := fmt.Sprintf("%s/api/targets", c.httpBaseURL)
+	body := map[string]string{"target": target}
+	data, _ := json.Marshal(body)
+	resp, err := http.Post(url, "application/json", bytes.NewBuffer(data))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		return fmt.Errorf("failed to register target: %d", resp.StatusCode)
+	}
+	c.lastTarget = target
+	return nil
+}
+
+func (c *testContext) aMockServerIsListeningAt(addr string) error {
+	cleanAddr := strings.TrimPrefix(addr, "grpc://")
+	cleanAddr = strings.TrimPrefix(cleanAddr, "http://")
+	if strings.Contains(cleanAddr, "/") {
+		cleanAddr = strings.Split(cleanAddr, "/")[0]
+	}
+
+	// Cek apakah port sudah diduduki oleh server eksternal
+	conn, err := net.DialTimeout("tcp", cleanAddr, 500*time.Millisecond)
+	if err == nil {
+		conn.Close()
+		fmt.Printf("Mock server already running at %s, skipping internal start for scenario verification.\n", cleanAddr)
+		return nil
+	}
+
+	if strings.HasPrefix(addr, "grpc://") {
+		cleanAddr := strings.TrimPrefix(addr, "grpc://")
+		lis, err := net.Listen("tcp", cleanAddr)
+		if err != nil {
+			return err
+		}
+		c.mockServerGRPC = grpc.NewServer()
+		proto.RegisterTargetServiceServer(c.mockServerGRPC, &mockTargetTestServer{tc: c})
+		go c.mockServerGRPC.Serve(lis)
+		return nil
+	}
+
+	// HTTP Implementation (Legacy/Fallback)
+	c.mockServer = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var msg models.Message[string]
+		json.NewDecoder(r.Body).Decode(&msg)
+		c.pushedMsgs = append(c.pushedMsgs, msg)
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// We'll try to listen on the port mentioned in addr (e.g. localhost:9090)
+	l, err := net.Listen("tcp", "localhost:9090")
+	if err != nil {
+		// If 9090 is busy, we just let it fail or use a random one.
+		// For simplicity in this env, we assume 9090 is available for tests.
+		return err
+	}
+	c.mockServer.Listener = l
+	c.mockServer.Start()
+	return nil
+}
+
+func (c *testContext) aMockServerAtReturnsError(addr string) error {
+	c.mockServer = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	l, err := net.Listen("tcp", "localhost:9091")
+	if err != nil {
+		return err
+	}
+	c.mockServer.Listener = l
+	c.mockServer.Start()
+	return nil
+}
+
+func (c *testContext) theMockServerShouldReceiveMessage(id string) error {
+	timeout := time.After(5 * time.Second)
+	tick := time.NewTicker(500 * time.Millisecond)
+	defer tick.Stop()
+
+	for {
+		select {
+		case <-timeout:
+			return fmt.Errorf("mock server never received message %s", id)
+		case <-tick.C:
+			for _, m := range c.pushedMsgs {
+				if m.ID == id {
+					return nil
+				}
+			}
+		}
+	}
+}
+
+func (c *testContext) theMessageShouldEventuallyBeDeletedFromTheQueue(id string) error {
+	timeout := time.After(5 * time.Second)
+	tick := time.NewTicker(500 * time.Millisecond)
+	defer tick.Stop()
+
+	for {
+		select {
+		case <-timeout:
+			return fmt.Errorf("message %s still in queue", id)
+		case <-tick.C:
+			url := fmt.Sprintf("%s/api/stats", c.httpBaseURL)
+			resp, err := http.Get(url)
+			if err != nil {
+				continue
+			}
+			var stats map[string]interface{}
+			json.NewDecoder(resp.Body).Decode(&stats)
+			resp.Body.Close()
+			if stats["queue_size"].(float64) == 0 {
+				return nil
+			}
+		}
+	}
+}
+
+func (c *testContext) theMessageShouldStayInTheQueue(id string) error {
+	url := fmt.Sprintf("%s/api/stats", c.httpBaseURL)
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	var stats map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&stats)
+	if stats["queue_size"].(float64) == 0 {
+		return fmt.Errorf("message %s was removed from queue unexpectedly", id)
+	}
+	return nil
+}
+
+func (c *testContext) itsRetryCountShouldBe(id string, count int) error {
+	url := fmt.Sprintf("%s/api/messages/all", c.httpBaseURL)
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	var msgs []models.Message[string]
+	json.NewDecoder(resp.Body).Decode(&msgs)
+
+	for _, m := range msgs {
+		if m.ID == id {
+			if m.RetryCount != count {
+				return fmt.Errorf("expected retry count %d, got %d", count, m.RetryCount)
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("message %s not found in queue", id)
+}
+
+func (c *testContext) itsNextRetryShouldBeSetAccordingToExponentialBackoff(id string) error {
+	url := fmt.Sprintf("%s/api/messages/all", c.httpBaseURL)
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	var msgs []models.Message[string]
+	json.NewDecoder(resp.Body).Decode(&msgs)
+
+	for _, m := range msgs {
+		if m.ID == id {
+			if m.NextRetry <= time.Now().Unix() {
+				return fmt.Errorf("NextRetry should be in the future, got %d", m.NextRetry)
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("message %s not found in queue", id)
+}
+
 func InitializeScenario(sc *godog.ScenarioContext) {
 	tc := &testContext{}
 
@@ -458,6 +663,15 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 	sc.Step(`^when a consumer pops a message via HTTP$`, tc.whenAConsumerPopsAMessage)
 
 	sc.Step(`^the producer sends the following JSON payload via gRPC:$`, tc.theProducerSendsTheFollowingJSONPayloadViaGRPC)
+
+	sc.Step(`^the broker has a registered target "([^"]*)"$`, tc.theBrokerHasARegisteredTarget)
+	sc.Step(`^a mock server is listening at "([^"]*)"$`, tc.aMockServerIsListeningAt)
+	sc.Step(`^the mock server should receive message "([^"]*)"$`, tc.theMockServerShouldReceiveMessage)
+	sc.Step(`^the message "([^"]*)" should eventually be deleted from the queue$`, tc.theMessageShouldEventuallyBeDeletedFromTheQueue)
+	sc.Step(`^a mock server at "([^"]*)" returns 500 error$`, tc.aMockServerAtReturnsError)
+	sc.Step(`^the message "([^"]*)" should stay in the queue$`, tc.theMessageShouldStayInTheQueue)
+	sc.Step(`^its "RetryCount" should be (\d+)$`, tc.itsRetryCountShouldBe)
+	sc.Step(`^its "NextRetry" should be set according to exponential backoff$`, tc.itsNextRetryShouldBeSetAccordingToExponentialBackoff)
 
 	sc.Before(func(ctx context.Context, sc *godog.Scenario) (context.Context, error) {
 		tc.reset()

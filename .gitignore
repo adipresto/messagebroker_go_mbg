@@ -1,3 +1,4 @@
 .dotfiles
 .env
 config.yaml
+*.exe

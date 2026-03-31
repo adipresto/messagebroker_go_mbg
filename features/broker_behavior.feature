@@ -74,3 +74,26 @@ Feature: Message Broker Reliability and Persistence
     Then the dashboard stats should show queue size as 1
     And when a consumer pops a message via HTTP
     Then the dashboard stats should show queue size as 0
+
+  Scenario: Active Delivery - Automatic Push to Target
+    Given the broker has a registered target "http://localhost:9090/webhook"
+    And a mock server is listening at "http://localhost:9090/webhook"
+    When a producer pushes a message "PUSH-001" with payload "AutoDelivery"
+    Then the mock server should receive message "PUSH-001"
+    And the message "PUSH-001" should eventually be deleted from the queue
+
+  Scenario: Active Delivery - Exponential Backoff on Failure
+    Given the broker has a registered target "http://localhost:9091/fail"
+    And a mock server at "http://localhost:9091/fail" returns 500 error
+    When a producer pushes a message "RETRY-001" with payload "FailTarget"
+    Then the message "RETRY-001" should stay in the queue
+    And its "RetryCount" should be 1
+    And its "NextRetry" should be set according to exponential backoff
+
+  Scenario: Active Delivery via gRPC
+    Given the broker is initialized with an empty queue
+    And a mock server is listening at "grpc://localhost:50052"
+    And the broker has a registered target "grpc://localhost:50052"
+    When a producer pushes a message "TX-GRPC" with payload "Hello gRPC"
+    Then the mock server should receive message "TX-GRPC"
+    And the message "TX-GRPC" should eventually be deleted from the queue

@@ -9,5 +9,10 @@ circuit_breaker:
   threshold: 3
   timeout_seconds: 5
 
+dispatcher:
+  targets: []
+  max_retries: 3
+  base_interval_seconds: 1
+
 logging:
   level: "info"

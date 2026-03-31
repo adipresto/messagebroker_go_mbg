@@ -22,15 +22,17 @@ var upgrader = websocket.Upgrader{
 }
 
 type HTTPServer struct {
-	broker *broker.Broker[string]
-	mu     sync.Mutex
-	conns  map[*websocket.Conn]bool
+	broker     *broker.Broker[string]
+	dispatcher *broker.Dispatcher[string]
+	mu         sync.Mutex
+	conns      map[*websocket.Conn]bool
 }
 
-func NewHTTPServer(b *broker.Broker[string]) *HTTPServer {
+func NewHTTPServer(b *broker.Broker[string], d *broker.Dispatcher[string]) *HTTPServer {
 	return &HTTPServer{
-		broker: b,
-		conns:  make(map[*websocket.Conn]bool),
+		broker:     b,
+		dispatcher: d,
+		conns:      make(map[*websocket.Conn]bool),
 	}
 }
 
@@ -65,8 +67,10 @@ func (s *HTTPServer) Handler() http.Handler {
 	// REST API
 	mux.HandleFunc("POST /api/messages", s.handlePush)
 	mux.HandleFunc("GET /api/messages", s.handlePop)
+	mux.HandleFunc("GET /api/messages/all", s.handleAll)
 	mux.HandleFunc("GET /api/stats", s.handleStats)
 	mux.HandleFunc("GET /api/health", s.handleHealth)
+	mux.HandleFunc("POST /api/targets", s.handleRegisterTarget)
 
 	// WebSocket
 	mux.HandleFunc("/ws", s.handleWS)
@@ -102,6 +106,14 @@ func (s *HTTPServer) handlePop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	json.NewEncoder(w).Encode(msg)
+}
+
+func (s *HTTPServer) handleAll(w http.ResponseWriter, r *http.Request) {
+	var msgs []models.Message[string]
+	for m := range s.broker.All() {
+		msgs = append(msgs, m)
+	}
+	json.NewEncoder(w).Encode(msgs)
 }
 
 func (s *HTTPServer) handleStats(w http.ResponseWriter, r *http.Request) {
@@ -143,4 +155,22 @@ func (s *HTTPServer) handleWS(w http.ResponseWriter, r *http.Request) {
 func (s *HTTPServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))
+}
+
+func (s *HTTPServer) handleRegisterTarget(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Target string `json:"target"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if s.dispatcher != nil {
+		s.dispatcher.AddTarget(body.Target)
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]string{"status": "target registered", "target": body.Target})
+	} else {
+		http.Error(w, "dispatcher not initialized", http.StatusInternalServerError)
+	}
 }
