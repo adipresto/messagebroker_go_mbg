@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MBG Dashboard - Real-time Message Broker Viewer</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://unpkg.com/rxjs@7.8.1/dist/bundles/rxjs.umd.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>MBG Dashboard</h1>
+            <div id="status-badge" class="badge offline">Disconnected</div>
+        </header>
+
+        <main>
+            <section class="stats-grid">
+                <div class="card">
+                    <h3>Queue Size</h3>
+                    <div id="queue-count" class="stat-value">0</div>
+                    <p>Messages pending in storage</p>
+                </div>
+                <div class="card">
+                    <h3>Last Update</h3>
+                    <div id="last-update" class="stat-value small">-</div>
+                    <p id="update-timestamp"></p>
+                </div>
+            </section>
+
+            <section class="log-section">
+                <h3>Activity Log</h3>
+                <div id="log-container" class="log-container">
+                    <div class="log-entry system">Initializing WebSocket connection...</div>
+                </div>
+            </section>
+        </main>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>

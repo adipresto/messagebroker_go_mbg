@@ -1,0 +1,13 @@
+broker:
+  host: "0.0.0.0"
+  port: 8080
+  http_port: 8081
+  grpc_port: 50051
+  storage_path: "./data/messages"
+
+circuit_breaker:
+  threshold: 3
+  timeout_seconds: 5
+
+logging:
+  level: "info"

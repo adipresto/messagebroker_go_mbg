@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package broker;
+
+option go_package = "mbg/api/proto";
+
+service BrokerService {
+  rpc Push(PushRequest) returns (PushResponse);
+  rpc Pop(PopRequest) returns (PopResponse);
+}
+
+message PushRequest {
+  string id = 1;
+  string payload = 2;
+}
+
+message PushResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message PopRequest {}
+
+message PopResponse {
+  string id = 1;
+  string payload = 2;
+  int64 created_at = 3;
+}
