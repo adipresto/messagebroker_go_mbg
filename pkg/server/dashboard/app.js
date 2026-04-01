@@ -4,6 +4,7 @@ const { map, scan, filter, switchMap, catchError, retry, tap, delay } = rxjs.ope
 const socketUrl = `ws://${window.location.host}/ws`;
 const statusBadge = document.getElementById('status-badge');
 const queueCount = document.getElementById('queue-count');
+const dlqCount = document.getElementById('dlq-count');
 const lastUpdate = document.getElementById('last-update');
 const logContainer = document.getElementById('log-container');
 
@@ -41,9 +42,21 @@ function connect() {
 socket$.pipe(
     tap(data => {
         queueCount.textContent = data.queue_size;
+        dlqCount.textContent = data.dlq_size;
+        
+        if (data.dlq_size > 0) {
+            dlqCount.classList.remove('warning');
+            dlqCount.style.color = 'var(--error)';
+        } else {
+            dlqCount.classList.add('warning');
+            dlqCount.style.color = '';
+        }
+
         const now = new Date();
         lastUpdate.textContent = now.toLocaleTimeString();
-        addLog('Broker', `Queue updated: ${data.queue_size} messages`, 'pop');
+        
+        // Log update only if data changed
+        addLog('Broker', `Update received - Queue: ${data.queue_size}, DLQ: ${data.dlq_size}`, 'pop');
     })
 ).subscribe();
 

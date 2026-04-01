@@ -11,20 +11,23 @@ import (
 )
 
 type Broker[T any] struct {
-	mu          sync.RWMutex
-	messages    []models.Message[T]
-	storagePath string
-	listeners   []chan struct{}
+	mu             sync.RWMutex
+	messages       []models.Message[T]
+	storagePath    string
+	deadLetterPath string
+	listeners      []chan struct{}
 }
 
-func NewBroker[T any](storagePath string) *Broker[T] {
-	// Create directory if not exists
+func NewBroker[T any](storagePath string, deadLetterPath string) *Broker[T] {
+	// Create directories if not exists
 	os.MkdirAll(storagePath, 0755)
+	os.MkdirAll(deadLetterPath, 0755)
 
 	b := &Broker[T]{
-		messages:    make([]models.Message[T], 0),
-		storagePath: storagePath,
-		listeners:   make([]chan struct{}, 0),
+		messages:       make([]models.Message[T], 0),
+		storagePath:    storagePath,
+		deadLetterPath: deadLetterPath,
+		listeners:      make([]chan struct{}, 0),
 	}
 
 	// Load existing messages from disk on startup (Outbox Recovery)
@@ -50,16 +53,35 @@ func (b *Broker[T]) RemoveFromDisk(id string) error {
 
 // Recover memuat ulang pesan dari storage_path saat startup
 func (b *Broker[T]) Recover() {
-	files, _ := os.ReadDir(b.storagePath)
+	absPath, _ := filepath.Abs(b.storagePath)
+	fmt.Printf("Recovering messages from: %s (Absolute: %s)\n", b.storagePath, absPath)
+	files, err := os.ReadDir(b.storagePath)
+	if err != nil {
+		fmt.Printf("Failed to read storage directory %s: %v\n", b.storagePath, err)
+		return
+	}
+
+	count := 0
 	for _, file := range files {
 		if filepath.Ext(file.Name()) == ".json" {
-			data, _ := os.ReadFile(filepath.Join(b.storagePath, file.Name()))
+			path := filepath.Join(b.storagePath, file.Name())
+			data, err := os.ReadFile(path)
+			if err != nil {
+				fmt.Printf("Failed to read message file %s: %v\n", path, err)
+				continue
+			}
+
 			var msg models.Message[T]
 			if err := json.Unmarshal(data, &msg); err == nil {
 				b.messages = append(b.messages, msg)
+				fmt.Printf(" [Recovery] Loaded Message ID: %s\n", msg.ID)
+				count++
+			} else {
+				fmt.Printf("Failed to unmarshal message %s: %v\n", path, err)
 			}
 		}
 	}
+	fmt.Printf("Successfully recovered %d messages\n", count)
 }
 
 // Push menambahkan pesan ke persistensi dulu, baru ke memori (Outbox style)
@@ -84,21 +106,21 @@ func (b *Broker[T]) Pop() (models.Message[T], error) {
 	if len(b.messages) == 0 {
 		b.mu.Unlock()
 		var zero models.Message[T]
-		return zero, fmt.Errorf("queue is empty")
+		return zero, fmt.Errorf("queue_size is zero")
 	}
 
 	msg := b.messages[0]
-
-	// Hapus dari disk setelah berhasil diambil (Acknowledge)
-	if err := b.RemoveFromDisk(msg.ID); err != nil {
-		b.mu.Unlock()
-		return msg, fmt.Errorf("failed to remove from persistence: %w", err)
-	}
-
 	b.messages = b.messages[1:]
 	b.mu.Unlock()
 
+	// Notify after unlock
 	b.notify()
+
+	// Remove from disk AFTER memory update and unlock (latency reduction)
+	if err := b.RemoveFromDisk(msg.ID); err != nil {
+		return msg, fmt.Errorf("failed to remove from persistence: %w", err)
+	}
+
 	return msg, nil
 }
 
@@ -113,11 +135,65 @@ func (b *Broker[T]) Peek() (models.Message[T], error) {
 	return b.messages[0], nil
 }
 
+// MoveToDLQ memindahkan pesan ke folder dead_letter secara permanen
+func (b *Broker[T]) MoveToDLQ(id string) error {
+	b.mu.Lock()
+	index := -1
+	var msg models.Message[T]
+	for i, m := range b.messages {
+		if m.ID == id {
+			index = i
+			msg = m
+			break
+		}
+	}
+
+	if index == -1 {
+		b.mu.Unlock()
+		return fmt.Errorf("message %s not found in memory", id)
+	}
+
+	// Remove ALL instances from memory (pola Competing Consumers)
+	newMessages := make([]models.Message[T], 0, len(b.messages))
+	for _, m := range b.messages {
+		if m.ID != id {
+			newMessages = append(newMessages, m)
+		}
+	}
+	b.messages = newMessages
+	b.mu.Unlock()
+
+	b.notify()
+
+	// Move file
+	oldPath := filepath.Join(b.storagePath, fmt.Sprintf("%s.json", id))
+	newPath := filepath.Join(b.deadLetterPath, fmt.Sprintf("%s.json", id))
+
+	// Simpan versi terbaru (dengan RetryCount maskimal) sebelum dipindah
+	data, _ := json.Marshal(msg)
+	os.WriteFile(oldPath, data, 0644)
+
+	err := os.Rename(oldPath, newPath)
+	if err != nil {
+		// Jika rename gagal (beda drive dsb), coba copy & remove
+		data, err := os.ReadFile(oldPath)
+		if err != nil {
+			return err
+		}
+		err = os.WriteFile(newPath, data, 0644)
+		if err != nil {
+			return err
+		}
+		os.Remove(oldPath)
+	}
+
+	fmt.Printf(" [DLQ] Message %s moved to dead letter queue\n", id)
+	return nil
+}
+
 // Acknowledge menghapus pesan berdasarkan ID (Commit)
 func (b *Broker[T]) Acknowledge(id string) error {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-
 	index := -1
 	for i, m := range b.messages {
 		if m.ID == id {
@@ -127,47 +203,61 @@ func (b *Broker[T]) Acknowledge(id string) error {
 	}
 
 	if index == -1 {
-		return fmt.Errorf("message %s not found", id)
+		b.mu.Unlock()
+		return fmt.Errorf("message %s not found in memory (already popped or sent?)", id)
 	}
 
-	// Hapus dari disk
-	if err := b.RemoveFromDisk(id); err != nil {
-		return err
+	// Remove ALL instances from memory
+	newMessages := make([]models.Message[T], 0, len(b.messages))
+	for _, m := range b.messages {
+		if m.ID != id {
+			newMessages = append(newMessages, m)
+		}
 	}
+	b.messages = newMessages
+	b.mu.Unlock()
 
-	// Hapus dari memori
-	b.messages = append(b.messages[:index], b.messages[index+1:]...)
-	
 	b.notify()
-	return nil
+
+	// Remove from disk outside lock
+	return b.RemoveFromDisk(id)
 }
 
 // Update memperbarui isi pesan di memori dan disk (misal untuk retry count)
 func (b *Broker[T]) Update(msg models.Message[T]) error {
-	// Simpan ke disk dulu
-	if err := b.SaveToDisk(msg); err != nil {
-		return err
-	}
-
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	found := false
 	for i, m := range b.messages {
 		if m.ID == msg.ID {
 			b.messages[i] = msg
-			return nil
+			found = true
+			break
 		}
 	}
 
-	return fmt.Errorf("message %s not found in memory", msg.ID)
+	if !found {
+		return fmt.Errorf("message %s not found in memory", msg.ID)
+	}
+
+	// Simpan ke disk hanya jika ada di memori
+	if err := b.SaveToDisk(msg); err != nil {
+		return err
+	}
+	return nil
 }
 
 // All tetap menggunakan iterator untuk pembacaan aman
 func (b *Broker[T]) All() iter.Seq[models.Message[T]] {
 	return func(yield func(models.Message[T]) bool) {
+		// Snapshot the slice to avoid holding RLock during yield/network/JSON
 		b.mu.RLock()
-		defer b.mu.RUnlock()
-		for _, m := range b.messages {
+		snapshot := make([]models.Message[T], len(b.messages))
+		copy(snapshot, b.messages)
+		b.mu.RUnlock()
+
+		for _, m := range snapshot {
 			if !yield(m) {
 				return
 			}
@@ -194,9 +284,19 @@ func (b *Broker[T]) notify() {
 	}
 }
 
-// GetStats returns the current number of messages in the queue.
-func (b *Broker[T]) GetStats() int {
+// GetStats returns the current number of messages in the queue and DLQ.
+func (b *Broker[T]) GetStats() (int, int) {
 	b.mu.RLock()
-	defer b.mu.RUnlock()
-	return len(b.messages)
+	queueSize := len(b.messages)
+	b.mu.RUnlock()
+
+	dlqFiles, _ := os.ReadDir(b.deadLetterPath)
+	dlqSize := 0
+	for _, f := range dlqFiles {
+		if !f.IsDir() && filepath.Ext(f.Name()) == ".json" {
+			dlqSize++
+		}
+	}
+
+	return queueSize, dlqSize
 }

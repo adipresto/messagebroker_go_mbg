@@ -97,3 +97,12 @@ Feature: Message Broker Reliability and Persistence
     When a producer pushes a message "TX-GRPC" with payload "Hello gRPC"
     Then the mock server should receive message "TX-GRPC"
     And the message "TX-GRPC" should eventually be deleted from the queue
+
+  Scenario: Dead Letter Queue - Max Retries Reached
+    Given the broker has a registered target "http://localhost:9092/dead"
+    And a mock server at "http://localhost:9092/dead" always returns 500 error
+    And the configuration has max_retries set to 3
+    When a producer pushes a message "DEAD-001" with payload "ToDLQ"
+    Then the message "DEAD-001" should eventually be moved to DLQ folder "../data/dead_letter/DEAD-001.json"
+    And the message "DEAD-001" should be removed from the main queue
+    And the dashboard stats should show dlq size as 1

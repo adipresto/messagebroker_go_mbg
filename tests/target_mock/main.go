@@ -93,6 +93,19 @@ func main() {
 		}
 	}()
 
+	// 4. Jalankan HTTP Dead Server (Port 9092) - Selalu return 500
+	go func() {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/dead", func(w http.ResponseWriter, r *http.Request) {
+			log.Printf("[HTTP Dead] Always returning 500 for DLQ testing...")
+			http.Error(w, "Always fail", http.StatusInternalServerError)
+		})
+		log.Println("Mock Target HTTP Dead (DLQ) Simulator listening on :9092")
+		if err := http.ListenAndServe(":9092", mux); err != nil {
+			log.Fatalf("HTTP server 9092 failed: %v", err)
+		}
+	}()
+
 	// Jaga agar main tidak exit
 	select {}
 }

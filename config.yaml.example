@@ -4,6 +4,7 @@ broker:
   http_port: 8081
   grpc_port: 50051
   storage_path: "./data/messages"
+  dead_letter_path: "./data/dead_letter"
 
 circuit_breaker:
   threshold: 3

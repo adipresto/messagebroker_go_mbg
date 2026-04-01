@@ -47,8 +47,10 @@ func (s *HTTPServer) broadcastStats() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	queueSize, dlqSize := s.broker.GetStats()
 	stats := map[string]interface{}{
-		"queue_size": s.broker.GetStats(),
+		"queue_size": queueSize,
+		"dlq_size":   dlqSize,
 		"timestamp":  time.Now().Unix(),
 	}
 
@@ -117,8 +119,10 @@ func (s *HTTPServer) handleAll(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *HTTPServer) handleStats(w http.ResponseWriter, r *http.Request) {
+	queueSize, dlqSize := s.broker.GetStats()
 	stats := map[string]interface{}{
-		"queue_size": s.broker.GetStats(),
+		"queue_size": queueSize,
+		"dlq_size":   dlqSize,
 	}
 	json.NewEncoder(w).Encode(stats)
 }

@@ -38,6 +38,7 @@ h1 {
     font-weight: 800;
     background: linear-gradient(to right, var(--accent-color), #818cf8);
     -webkit-background-clip: text;
+    background-clip: text;
     -webkit-text-fill-color: transparent;
 }
 
@@ -115,3 +116,12 @@ h3 {
 .log-entry.system { border-color: var(--warning); color: var(--warning); }
 .log-entry.push { border-color: var(--success); color: var(--success); }
 .log-entry.pop { border-color: var(--accent-color); color: var(--accent-color); }
+.log-entry.dlq { border-color: var(--error); color: var(--error); }
+
+.stat-value.warning {
+    color: var(--warning);
+}
+
+.card.dlq:hover {
+    border-color: var(--error);
+}

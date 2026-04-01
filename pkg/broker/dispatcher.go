@@ -20,21 +20,24 @@ import (
 )
 
 type Dispatcher[T any] struct {
-	broker  *Broker[T]
-	cfg     *config.Config
-	cb      circuitbreaker.CircuitBreaker
-	client  *http.Client
-	mu      sync.RWMutex
-	targets []string
+	broker      *Broker[T]
+	cfg         *config.Config
+	cb          circuitbreaker.CircuitBreaker
+	client      *http.Client
+	mu          sync.RWMutex
+	targets     []string
+	taskChan    chan models.Message[T]
+	inProgress  sync.Map // Track messages currently being handled by workers
 }
 
 func NewDispatcher[T any](b *Broker[T], cfg *config.Config, cb circuitbreaker.CircuitBreaker) *Dispatcher[T] {
 	return &Dispatcher[T]{
-		broker:  b,
-		cfg:     cfg,
-		cb:      cb,
-		client:  &http.Client{Timeout: 10 * time.Second},
-		targets: cfg.Dispatcher.Targets,
+		broker:   b,
+		cfg:      cfg,
+		cb:       cb,
+		client:   &http.Client{Timeout: 10 * time.Second},
+		targets:  cfg.Dispatcher.Targets,
+		taskChan: make(chan models.Message[T], 100),
 	}
 }
 
@@ -53,49 +56,87 @@ func (d *Dispatcher[T]) getTargets() []string {
 }
 
 func (d *Dispatcher[T]) Start() {
+	fmt.Println("Dispatcher started with RabbitMQ-style Competing Consumers...")
+
+	// Launch worker pool
+	workerCount := d.cfg.Dispatcher.WorkerCount
+	if workerCount <= 0 {
+		workerCount = 1
+	}
+	for i := 0; i < workerCount; i++ {
+		go d.worker(i)
+	}
+
 	notify := d.broker.Subscribe()
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
-	fmt.Println("Dispatcher started...")
 	for {
 		select {
 		case <-notify:
-			d.dispatchAll()
+			d.fillTaskQueue()
 		case <-ticker.C:
-			d.dispatchAll()
+			d.fillTaskQueue()
 		}
 	}
 }
 
-func (d *Dispatcher[T]) dispatchAll() {
-	now := time.Now().Unix()
-	var candidates []models.Message[T]
+func (d *Dispatcher[T]) worker(id int) {
+	fmt.Printf(" [Worker %d] ready\n", id)
+	for msg := range d.taskChan {
+		d.processMessage(msg)
+		d.inProgress.Delete(msg.ID)
+	}
+}
 
-	// Ambil kandidat pesan yang siap dikirim (NextRetry <= now)
-	// Kita iterasi dulu untuk menghindari deadlock saat modifikasi state broker
+func (d *Dispatcher[T]) fillTaskQueue() {
+	now := time.Now().Unix()
+	
+	// Scan broker for ready messages
 	for msg := range d.broker.All() {
 		if msg.NextRetry <= now {
-			candidates = append(candidates, msg)
-		}
-	}
-
-	for _, msg := range candidates {
-		targets := d.getTargets()
-		for _, target := range targets {
-			err := d.cb(func() error {
-				return d.sendToTarget(target, msg)
-			})
-
-			if err == nil {
-				fmt.Printf("Message %s successfully delivered to %s\n", msg.ID, target)
-				d.broker.Acknowledge(msg.ID)
-			} else {
-				fmt.Printf("Failed to deliver message %s to %s: %v\n", msg.ID, target, err)
-				d.handleFailure(msg, err)
+			// Only add if not already in flight
+			if _, ok := d.inProgress.LoadOrStore(msg.ID, true); !ok {
+				select {
+				case d.taskChan <- msg:
+					// Pushed to worker
+				default:
+					// Worker queue full, release progress lock
+					d.inProgress.Delete(msg.ID)
+				}
 			}
 		}
 	}
+}
+
+func (d *Dispatcher[T]) processMessage(msg models.Message[T]) {
+	targets := d.getTargets()
+	if len(targets) == 0 {
+		return
+	}
+
+	// Sesuai desain Competing Consumers: Kita kirim ke SALAH SATU target (Round-robin/First success)
+	// Namun jika Anda ingin kirim ke SEMUA, kita bisa iterasi. 
+	// RabbitMQ biasanya mengirim ke satu consumer per pesan.
+	// Di sini kita coba kirim ke target pertama yang sukses.
+	
+	var lastErr error
+	for _, target := range targets {
+		err := d.cb(func() error {
+			return d.sendToTarget(target, msg)
+		})
+
+		if err == nil {
+			fmt.Printf(" [Success] Message %s delivered to %s\n", msg.ID, target)
+			d.broker.Acknowledge(msg.ID)
+			return
+		}
+		lastErr = err
+	}
+
+	// Jika semua target gagal
+	fmt.Printf(" [Failure] Message %s failed for all targets: %v\n", msg.ID, lastErr)
+	d.handleFailure(msg, lastErr)
 }
 
 func (d *Dispatcher[T]) sendToTarget(target string, msg models.Message[T]) error {
@@ -168,11 +209,8 @@ func (d *Dispatcher[T]) sendToGRPCTarget(addr string, msg models.Message[T]) err
 
 func (d *Dispatcher[T]) handleFailure(msg models.Message[T], err error) {
 	if msg.RetryCount >= d.cfg.Dispatcher.MaxRetries {
-		fmt.Printf("Message %s reached MAX retries (%d). Giving up.\n", msg.ID, d.cfg.Dispatcher.MaxRetries)
-		// Tetap di queue tapi tidak akan diproses lagi karena NextRetry akan sangat jauh di masa depan?
-		// Atau bisa dihapus/pindah ke DLQ. Untuk sekarang kita biarkan di queue dengan NextRetry yang sangat lama.
-		msg.NextRetry = time.Now().Unix() + 31536000 // 1 year
-		d.broker.Update(msg)
+		fmt.Printf(" [!] Message %s reached MAX retries (%d). Moving to DLQ.\n", msg.ID, d.cfg.Dispatcher.MaxRetries)
+		d.broker.MoveToDLQ(msg.ID)
 		return
 	}
 
@@ -181,6 +219,6 @@ func (d *Dispatcher[T]) handleFailure(msg models.Message[T], err error) {
 	backoff := int64(d.cfg.Dispatcher.BaseInterval) * int64(math.Pow(2, float64(msg.RetryCount)))
 	msg.NextRetry = time.Now().Unix() + backoff
 
-	fmt.Printf("Message %s rescheduled in %ds (failure count: %d)\n", msg.ID, backoff, msg.RetryCount)
+	fmt.Printf(" [Retry] Message %s rescheduled in %ds (attempt %d)\n", msg.ID, backoff, msg.RetryCount)
 	d.broker.Update(msg)
 }

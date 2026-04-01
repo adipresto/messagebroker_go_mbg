@@ -11,8 +11,9 @@ type Config struct {
 		Host        string `yaml:"host"`
 		Port        int    `yaml:"port"`
 		HTTPPort    int    `yaml:"http_port"`
-		GRPCPort    int    `yaml:"grpc_port"`
-		StoragePath string `yaml:"storage_path"`
+		GRPCPort       int    `yaml:"grpc_port"`
+		StoragePath    string `yaml:"storage_path"`
+		DeadLetterPath string `yaml:"dead_letter_path"`
 	} `yaml:"broker"`
 	CircuitBreaker struct {
 		Threshold      int `yaml:"threshold"`
@@ -22,6 +23,7 @@ type Config struct {
 		Targets        []string `yaml:"targets"`
 		MaxRetries     int      `yaml:"max_retries"`
 		BaseInterval   int      `yaml:"base_interval_seconds"`
+		WorkerCount    int      `yaml:"worker_count"`
 	} `yaml:"dispatcher"`
 }
 

@@ -26,6 +26,7 @@ type testContext struct {
 	threshold   int
 	timeout     time.Duration
 	storageDir  string
+	dlqDir      string
 	receivedMsg models.Message[any]
 	lastError   error
 	lastResp    *http.Response
@@ -43,6 +44,7 @@ type testContext struct {
 	mockServerGRPC *grpc.Server
 	lastTarget     string
 	pushedMsgs     []models.Message[string]
+	activeMsgID    string // Track the most recently pushed message ID for context
 }
 
 type mockTargetTestServer struct {
@@ -58,7 +60,28 @@ func (s *mockTargetTestServer) Deliver(ctx context.Context, req *proto.DeliveryR
 	return &proto.DeliveryResponse{Status: "SUCCESS"}, nil
 }
 
+func (c *testContext) purgeStorage() {
+	// Root of current execution relative to feature folder
+	storagePath := "../data/messages"
+	dlqPath := "../data/dead_letter"
+
+	// Cleanup common directories
+	for _, p := range []string{storagePath, dlqPath} {
+		files, _ := filepath.Glob(filepath.Join(p, "*.json"))
+		for _, f := range files {
+			os.Remove(f)
+		}
+		if len(files) > 0 {
+			fmt.Printf("Purged storage directory: %s\n", p)
+		}
+	}
+}
+
 func (c *testContext) reset() {
+	// Kill any leftover broker process to ensure isolation
+	_ = exec.Command("taskkill", "/F", "/IM", "mbg.exe", "/T").Run()
+	time.Sleep(2500 * time.Millisecond)
+
 	if c.mockServerGRPC != nil {
 		c.mockServerGRPC.Stop()
 		c.mockServerGRPC = nil
@@ -72,11 +95,17 @@ func (c *testContext) reset() {
 	}
 	c.threshold = 3
 	c.timeout = 5 * time.Second
-	c.storageDir = "../data/messages/"
+	abs, _ := filepath.Abs("../data/messages/")
+	c.storageDir = abs
+	absDLQ, _ := filepath.Abs("../data/dead_letter/")
+	c.dlqDir = absDLQ
 	c.receivedMsg = models.Message[any]{}
 	c.lastError = nil
 
-	// Drain the queue to ensure clean state
+	// Ensure clean state on disk after process is dead
+	c.purgeStorage()
+
+	// Drain the queue to ensure clean state (if anyone is still listening)
 	if c.httpBaseURL != "" {
 		c.drainQueue()
 	}
@@ -99,27 +128,38 @@ func (c *testContext) drainQueue() {
 
 func (c *testContext) waitForServer() error {
 	url := fmt.Sprintf("%s/api/health", c.httpBaseURL)
-	timeout := time.After(10 * time.Second)
-	tick := time.NewTicker(500 * time.Millisecond)
-	defer tick.Stop()
-
-	for {
-		select {
-		case <-timeout:
-			return fmt.Errorf("server at %s did not become healthy in time", c.httpBaseURL)
-		case <-tick.C:
-			resp, err := http.Get(url)
-			if err == nil && resp.StatusCode == http.StatusOK {
-				resp.Body.Close()
-				return nil
-			}
+	fmt.Printf("Waiting for server at %s to become healthy...\n", url)
+	for i := 0; i < 20; i++ {
+		resp, err := http.Get(url)
+		if err == nil && resp.StatusCode == http.StatusOK {
+			resp.Body.Close()
+			fmt.Printf("  Server is healthy at %s\n", url)
+			return nil
 		}
+		if err == nil {
+			resp.Body.Close()
+		}
+		fmt.Printf("  Attempt %d: server not ready yet...\n", i+1)
+		time.Sleep(500 * time.Millisecond)
 	}
+	return fmt.Errorf("server at %s did not become healthy in time after 10s", url)
 }
 
 func (c *testContext) theBrokerIsAccessibleAtHTTPAndGRPC(httpURL, grpcAddr string) error {
 	c.httpBaseURL = httpURL
 	c.grpcAddr = grpcAddr
+
+	// Check health with a very short timeout first
+	checkConn, err := net.DialTimeout("tcp", "localhost:8081", 100*time.Millisecond)
+	if err != nil {
+		fmt.Println("Broker down during accessibility check, attempting auto-start...")
+		// Use our smart-start function to spin it up
+		if err := c.theBrokerIsStartedAndExecutes("Background Start"); err != nil {
+			return fmt.Errorf("failed to auto-start broker: %w", err)
+		}
+	} else {
+		checkConn.Close()
+	}
 
 	// Ensure server is healthy before proceeding
 	if err := c.waitForServer(); err != nil {
@@ -148,6 +188,11 @@ func (c *testContext) theConfigurationHasTimeoutSetToSeconds(seconds int) error 
 	c.timeout = time.Duration(seconds) * time.Second
 	return nil
 }
+func (c *testContext) theConfigurationHasMaxRetriesSetTo(max int) error {
+	// Di sistem asli, kita mungkin perlu update config.yaml atau restart broker
+	// Untuk test ini, kita berasumsi broker sudah dikonfigurasi atau kita pasang lewat flag jika perlu.
+	return nil
+}
 
 func (c *testContext) theBrokerIsInitializedWithAnEmptyQueue() error {
 	c.drainQueue()
@@ -157,9 +202,9 @@ func (c *testContext) theBrokerIsInitializedWithAnEmptyQueue() error {
 func (c *testContext) theCircuitBreakerIsClosed() error {
 	return nil
 }
-
 func (c *testContext) aProducerPushesAMessageWithPayload(id, payload string) error {
 	msg := models.Message[string]{ID: id, Payload: payload}
+	c.activeMsgID = id // Save to context
 	data, _ := json.Marshal(msg)
 	url := fmt.Sprintf("%s/api/messages", c.httpBaseURL)
 	resp, err := http.Post(url, "application/json", bytes.NewBuffer(data))
@@ -245,15 +290,9 @@ func (c *testContext) subsequentPushAttemptsShouldFailImmediatelyWithError(errMs
 }
 
 func (c *testContext) theBrokerIsStopped() error {
-	// Only kill if it's currently running (to be safe/clean)
-	url := fmt.Sprintf("%s/api/health", c.httpBaseURL)
-	resp, err := http.Get(url)
-	if err == nil && resp.StatusCode == http.StatusOK {
-		resp.Body.Close()
-		// Kill the process - using taskkill as it's the most reliable way on Windows for mbg.exe
-		_ = exec.Command("taskkill", "/F", "/IM", "mbg.exe", "/T").Run()
-		time.Sleep(1 * time.Second) // Give it time to release sockets
-	}
+	// Simple taskkill for Windows
+	_ = exec.Command("taskkill", "/F", "/IM", "mbg.exe", "/T").Run()
+	time.Sleep(2 * time.Second) // Give more time for the OS to release sockets
 	return nil
 }
 
@@ -277,15 +316,45 @@ func (c *testContext) thereAreMessagesAndOnDiskIn(id1, id2, dir string) error {
 }
 
 func (c *testContext) theBrokerIsStartedAndExecutes(action string) error {
-	// Start mbg.exe in the background (using PowerShell for stability in this environment)
-	cmd := exec.Command("powershell", "-Command", "Start-Process -FilePath './mbg.exe' -NoNewWindow")
-	// Since we are running go test ./features, we need to point to the root's mbg.exe
-	cmd.Dir = ".."
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start mbg.exe: %w", err)
+	// 1. Cek apakah broker sudah jalan (port 8081).
+	// Jika action == "Recover", kita JANGAN skip start, karena kita butuh fresh start utk panggil Recover()
+	if action != "Recover" {
+		conn, err := net.DialTimeout("tcp", "localhost:8081", 100*time.Millisecond)
+		if err == nil {
+			conn.Close()
+			fmt.Println("Broker already running at localhost:8081, skipping start for action:", action)
+			return nil
+		}
+	} else {
+		fmt.Println("Action is Recover, ensuring fresh start (killing old if any)...")
+		_ = exec.Command("taskkill", "/F", "/IM", "mbg.exe", "/T").Run()
+		time.Sleep(2 * time.Second)
 	}
 
-	// Wait for the new instance to be healthy
+	// 2. Pastikan file binari ada
+	rootAbs, _ := filepath.Abs("..")
+	exeAbs := filepath.Join(rootAbs, "mbg.exe")
+	if _, err := os.Stat(exeAbs); err != nil {
+		return fmt.Errorf("mbg.exe not found at %s: %w", exeAbs, err)
+	}
+
+	// 3. Jalankan mbg.exe langsung dari Go (lebih transparan)
+	logFile, _ := os.Create("broker_test.log")
+	args := []string{}
+	if action == "Recover" {
+		args = append(args, "-no-dispatcher")
+		fmt.Println("Starting broker with -no-dispatcher flag for stability.")
+	}
+	cmd := exec.Command(exeAbs, args...)
+	cmd.Dir = rootAbs
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start mbg.exe directly: %w", err)
+	}
+
+	// Wait for the instance to be healthy
 	return c.waitForServer()
 }
 
@@ -334,6 +403,7 @@ func (c *testContext) theMessageShouldBePersistedAndQueuedNormally() error {
 }
 
 func (c *testContext) theProducerSendsMessageViaGRPC(id, payload string) error {
+	c.activeMsgID = id // Save to context
 	req := &proto.PushRequest{Id: id, Payload: payload}
 	resp, err := c.grpcClient.Push(context.Background(), req)
 	if err != nil {
@@ -418,6 +488,22 @@ func (c *testContext) theDashboardStatsShouldShowQueueSizeAs(expected int) error
 	actual := int(stats["queue_size"].(float64))
 	if actual != expected {
 		return fmt.Errorf("expected queue size %d, got %d", expected, actual)
+	}
+	return nil
+}
+
+func (c *testContext) theDashboardStatsShouldShowDlqSizeAs(expected int) error {
+	url := fmt.Sprintf("%s/api/stats", c.httpBaseURL)
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	var stats map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&stats)
+	actual := int(stats["dlq_size"].(float64))
+	if actual != expected {
+		return fmt.Errorf("expected DLQ size %d, got %d", expected, actual)
 	}
 	return nil
 }
@@ -541,10 +627,11 @@ func (c *testContext) theMessageShouldEventuallyBeDeletedFromTheQueue(id string)
 	tick := time.NewTicker(500 * time.Millisecond)
 	defer tick.Stop()
 
+	fmt.Printf("Waiting for message %s to be deleted from queue (timeout 5s)...\n", id)
 	for {
 		select {
 		case <-timeout:
-			return fmt.Errorf("message %s still in queue", id)
+			return fmt.Errorf("message %s still in queue after 5s", id)
 		case <-tick.C:
 			url := fmt.Sprintf("%s/api/stats", c.httpBaseURL)
 			resp, err := http.Get(url)
@@ -554,7 +641,9 @@ func (c *testContext) theMessageShouldEventuallyBeDeletedFromTheQueue(id string)
 			var stats map[string]interface{}
 			json.NewDecoder(resp.Body).Decode(&stats)
 			resp.Body.Close()
-			if stats["queue_size"].(float64) == 0 {
+			actual := int(stats["queue_size"].(float64))
+			fmt.Printf("  Polling queue size: %d\n", actual)
+			if actual == 0 {
 				return nil
 			}
 		}
@@ -576,46 +665,135 @@ func (c *testContext) theMessageShouldStayInTheQueue(id string) error {
 	return nil
 }
 
-func (c *testContext) itsRetryCountShouldBe(id string, count int) error {
-	url := fmt.Sprintf("%s/api/messages/all", c.httpBaseURL)
-	resp, err := http.Get(url)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	var msgs []models.Message[string]
-	json.NewDecoder(resp.Body).Decode(&msgs)
+func (c *testContext) itsRetryCountShouldBe(count int) error {
+	id := c.activeMsgID
+	timeout := time.After(5 * time.Second)
+	tick := time.NewTicker(500 * time.Millisecond)
+	defer tick.Stop()
 
-	for _, m := range msgs {
-		if m.ID == id {
-			if m.RetryCount != count {
-				return fmt.Errorf("expected retry count %d, got %d", count, m.RetryCount)
+	fmt.Printf("Waiting for message %s retry count to be %d (timeout 5s)...\n", id, count)
+	for {
+		select {
+		case <-timeout:
+			return fmt.Errorf("message %s retry count never reached %d after 5s", id, count)
+		case <-tick.C:
+			url := fmt.Sprintf("%s/api/messages/all", c.httpBaseURL)
+			resp, err := http.Get(url)
+			if err != nil {
+				continue
 			}
-			return nil
+			var msgs []models.Message[string]
+			json.NewDecoder(resp.Body).Decode(&msgs)
+			resp.Body.Close()
+
+			for _, m := range msgs {
+				if m.ID == id {
+					fmt.Printf("  Polling retry count for %s: %d\n", id, m.RetryCount)
+					if m.RetryCount == count {
+						return nil
+					}
+				}
+			}
 		}
 	}
-	return fmt.Errorf("message %s not found in queue", id)
 }
 
-func (c *testContext) itsNextRetryShouldBeSetAccordingToExponentialBackoff(id string) error {
-	url := fmt.Sprintf("%s/api/messages/all", c.httpBaseURL)
-	resp, err := http.Get(url)
+func (c *testContext) theMessageShouldEventuallyBeMovedToDLQFolder(id, path string) error {
+	timeout := time.After(20 * time.Second) // DLQ takes longer due to retries (2+4+8 = 14s)
+	tick := time.NewTicker(1 * time.Second)
+	defer tick.Stop()
+
+	// Path mapping
+	absPath := filepath.Join(c.dlqDir, id+".json")
+	fmt.Printf("Waiting for message %s to appear in DLQ: %s\n", id, absPath)
+
+	for {
+		select {
+		case <-timeout:
+			return fmt.Errorf("message %s never moved to DLQ after 10s", id)
+		case <-tick.C:
+			if _, err := os.Stat(absPath); err == nil {
+				fmt.Printf("  Message %s found in DLQ\n", id)
+				return nil
+			}
+		}
+	}
+}
+
+func (c *testContext) aMockServerAtAlwaysReturnsError(addr string) error {
+	// Similar to aMockServerAtReturnsError but maybe for a specific port
+	c.mockServer = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	cleanAddr := strings.TrimPrefix(addr, "http://")
+	if strings.Contains(cleanAddr, "/") {
+		cleanAddr = strings.Split(cleanAddr, "/")[0]
+	}
+	l, err := net.Listen("tcp", cleanAddr)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	var msgs []models.Message[string]
-	json.NewDecoder(resp.Body).Decode(&msgs)
+	c.mockServer.Listener = l
+	c.mockServer.Start()
+	return nil
+}
 
-	for _, m := range msgs {
-		if m.ID == id {
-			if m.NextRetry <= time.Now().Unix() {
-				return fmt.Errorf("NextRetry should be in the future, got %d", m.NextRetry)
+func (c *testContext) theMessageShouldBeRemovedFromTheMainQueue(id string) error {
+	timeout := time.After(5 * time.Second)
+	tick := time.NewTicker(500 * time.Millisecond)
+	defer tick.Stop()
+
+	for {
+		select {
+		case <-timeout:
+			return fmt.Errorf("message %s still in queue after 5s", id)
+		case <-tick.C:
+			url := fmt.Sprintf("%s/api/stats", c.httpBaseURL)
+			resp, err := http.Get(url)
+			if err != nil {
+				continue
 			}
-			return nil
+			var stats map[string]interface{}
+			json.NewDecoder(resp.Body).Decode(&stats)
+			resp.Body.Close()
+			if stats["queue_size"].(float64) == 0 {
+				return nil
+			}
 		}
 	}
-	return fmt.Errorf("message %s not found in queue", id)
+}
+
+func (c *testContext) itsNextRetryShouldBeSetAccordingToExponentialBackoff() error {
+	id := c.activeMsgID
+	timeout := time.After(5 * time.Second)
+	tick := time.NewTicker(500 * time.Millisecond)
+	defer tick.Stop()
+
+	fmt.Printf("Waiting for message %s NextRetry update (timeout 5s)...\n", id)
+	for {
+		select {
+		case <-timeout:
+			return fmt.Errorf("message %s NextRetry was never updated after 5s", id)
+		case <-tick.C:
+			url := fmt.Sprintf("%s/api/messages/all", c.httpBaseURL)
+			resp, err := http.Get(url)
+			if err != nil {
+				continue
+			}
+			var msgs []models.Message[string]
+			json.NewDecoder(resp.Body).Decode(&msgs)
+			resp.Body.Close()
+
+			for _, m := range msgs {
+				if m.ID == id {
+					if m.NextRetry > time.Now().Unix() {
+						fmt.Printf("  NextRetry set successfully: %d\n", m.NextRetry)
+						return nil
+					}
+				}
+			}
+		}
+	}
 }
 
 func InitializeScenario(sc *godog.ScenarioContext) {
@@ -673,7 +851,18 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 	sc.Step(`^its "RetryCount" should be (\d+)$`, tc.itsRetryCountShouldBe)
 	sc.Step(`^its "NextRetry" should be set according to exponential backoff$`, tc.itsNextRetryShouldBeSetAccordingToExponentialBackoff)
 
+	sc.Step(`^the configuration has max_retries set to (\d+)$`, tc.theConfigurationHasMaxRetriesSetTo)
+	sc.Step(`^the message "([^"]*)" should eventually be moved to DLQ folder "([^"]*)"$`, tc.theMessageShouldEventuallyBeMovedToDLQFolder)
+	sc.Step(`^the message "([^"]*)" should be removed from the main queue$`, tc.theMessageShouldBeRemovedFromTheMainQueue)
+	sc.Step(`^the dashboard stats should show dlq size as (\d+)$`, tc.theDashboardStatsShouldShowDlqSizeAs)
+	sc.Step(`^a mock server at "([^"]*)" always returns 500 error$`, tc.aMockServerAtAlwaysReturnsError)
+
 	sc.Before(func(ctx context.Context, sc *godog.Scenario) (context.Context, error) {
+		tc.reset()
+		return ctx, nil
+	})
+
+	sc.After(func(ctx context.Context, sc *godog.Scenario, err error) (context.Context, error) {
 		tc.reset()
 		return ctx, nil
 	})

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"mbg/api/proto"
@@ -16,6 +17,10 @@ import (
 )
 
 func main() {
+	// 0. Parse Flags
+	noDispatcher := flag.Bool("no-dispatcher", false, "Disable the active dispatcher (active delivery)")
+	flag.Parse()
+
 	// 1. Load Configuration
 	cfg, err := config.LoadConfig("config.yaml")
 	if err != nil {
@@ -27,11 +32,15 @@ func main() {
 		cfg.CircuitBreaker.Threshold,
 		time.Duration(cfg.CircuitBreaker.TimeoutSeconds)*time.Second,
 	)
-	b := broker.NewBroker[string](cfg.Broker.StoragePath)
+	b := broker.NewBroker[string](cfg.Broker.StoragePath, cfg.Broker.DeadLetterPath)
 
 	// 3. Setup Dispatcher (Active Delivery)
 	disp := broker.NewDispatcher(b, cfg, cb)
-	go disp.Start()
+	if !*noDispatcher {
+		go disp.Start()
+	} else {
+		log.Println("Maintenance Mode: Dispatcher is DISABLED.")
+	}
 
 	// 4. Start gRPC Server
 	grpcServer := grpc.NewServer()
