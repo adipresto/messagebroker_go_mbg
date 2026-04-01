@@ -1,0 +1,306 @@
+[1;37mFeature:[0m Message Broker Reliability and Persistence
+  As a developer
+  I want a message broker that ensures data durability and protects against system failures
+  So that I can build reliable distributed systems
+Broker down during accessibility check, attempting auto-start...
+Waiting for server at http://localhost:8081/api/health to become healthy...
+  Attempt 1: server not ready yet...
+  Server is healthy at http://localhost:8081/api/health
+Waiting for server at http://localhost:8081/api/health to become healthy...
+  Server is healthy at http://localhost:8081/api/health
+
+  [1;37mBackground:[0m
+    [32mGiven[0m [32mthe broker is accessible at HTTP "http://localhost:8081" and gRPC "localhost:50051"[0m [1;30m# broker_test.go:969 -> *testContext[0m
+    [32mAnd[0m [32mthe configuration has threshold set to 3[0m                                              [1;30m# broker_test.go:970 -> *testContext[0m
+    [32mAnd[0m [32mthe configuration has timeout set to 5 seconds[0m                                        [1;30m# broker_test.go:971 -> *testContext[0m
+
+  [1;37mScenario:[0m Happy Path - Message Persistence and Delivery                                     [1;30m# broker_behavior.feature:11[0m
+    [32mGiven[0m [32mthe broker is initialized with an empty queue[0m                                       [1;30m# broker_test.go:972 -> *testContext[0m
+    [32mAnd[0m [32mthe circuit breaker is closed[0m                                                         [1;30m# broker_test.go:973 -> *testContext[0m
+    [32mWhen[0m [32ma producer pushes a message "TX-001" with payload "Hello"[0m                            [1;30m# broker_test.go:974 -> *testContext[0m
+C:\Users\KAINE\Documents\Development\message_broker_sendiri\data\messages\TX-001.json
+    [32mThen[0m [32mthe message "TX-001" should be stored in "../data/messages/TX-001.json"[0m              [1;30m# broker_test.go:975 -> *testContext[0m
+    [32mAnd[0m [32mthe message should be available in the memory queue[0m                                   [1;30m# broker_test.go:976 -> *testContext[0m
+    [32mAnd[0m [32mwhen a consumer pops a message[0m                                                        [1;30m# broker_test.go:977 -> *testContext[0m
+    [32mThen[0m [32mthe consumer should receive message "TX-001"[0m                                         [1;30m# broker_test.go:978 -> *testContext[0m
+    [32mAnd[0m [32mthe file "./data/messages/TX-001.json" should be deleted[0m                              [1;30m# broker_test.go:979 -> *testContext[0m
+Broker down during accessibility check, attempting auto-start...
+Waiting for server at http://localhost:8081/api/health to become healthy...
+  Attempt 1: server not ready yet...
+  Server is healthy at http://localhost:8081/api/health
+Waiting for server at http://localhost:8081/api/health to become healthy...
+  Server is healthy at http://localhost:8081/api/health
+
+  [1;37mScenario:[0m Circuit Breaker - Failure Threshold Reached                                       [1;30m# broker_behavior.feature:21[0m
+    [32mGiven[0m [32mthe circuit breaker threshold is set to 3[0m                                           [1;30m# broker_test.go:980 -> *testContext[0m
+    [32mAnd[0m [32mthe circuit breaker is closed[0m                                                         [1;30m# broker_test.go:973 -> *testContext[0m
+    [32mWhen[0m [32m3 consecutive push attempts fail due to storage errors[0m                               [1;30m# broker_test.go:981 -> *testContext[0m
+    [32mThen[0m [32mthe circuit breaker should transition to "Open" state[0m                                [1;30m# broker_test.go:982 -> *testContext[0m
+    [32mAnd[0m [32msubsequent push attempts should fail immediately with "circuit is open" error[0m         [1;30m# broker_test.go:983 -> *testContext[0m
+Broker down during accessibility check, attempting auto-start...
+Waiting for server at http://localhost:8081/api/health to become healthy...
+  Attempt 1: server not ready yet...
+  Server is healthy at http://localhost:8081/api/health
+Waiting for server at http://localhost:8081/api/health to become healthy...
+  Server is healthy at http://localhost:8081/api/health
+
+  [1;37mScenario:[0m System Recovery - Message Re-hydration                                                  [1;30m# broker_behavior.feature:28[0m
+    [32mGiven[0m [32mthe broker is stopped[0m                                                                     [1;30m# broker_test.go:984 -> *testContext[0m
+    [32mAnd[0m [32mthere are messages "TX-101" and "TX-102" on disk in "../data/messages/"[0m                     [1;30m# broker_test.go:985 -> *testContext[0m
+Action is Recover, ensuring fresh start (killing old if any)...
+Starting broker with -no-dispatcher flag for stability.
+Waiting for server at http://localhost:8081/api/health to become healthy...
+  Attempt 1: server not ready yet...
+  Server is healthy at http://localhost:8081/api/health
+    [32mWhen[0m [32mthe broker is started and executes "Recover"[0m                                               [1;30m# broker_test.go:986 -> *testContext[0m
+    [32mThen[0m [32mthe memory queue should contain 2 messages[0m                                                 [1;30m# broker_test.go:987 -> *testContext[0m
+Purged storage directory: ../data/messages
+    [32mAnd[0m [32mthe messages "TX-101" and "TX-102" should be available for consumption in the correct order[0m [1;30m# broker_test.go:988 -> *testContext[0m
+Broker down during accessibility check, attempting auto-start...
+Waiting for server at http://localhost:8081/api/health to become healthy...
+  Attempt 1: server not ready yet...
+  Server is healthy at http://localhost:8081/api/health
+Waiting for server at http://localhost:8081/api/health to become healthy...
+  Server is healthy at http://localhost:8081/api/health
+
+  [1;37mScenario:[0m Circuit Breaker - Self-Healing                                                    [1;30m# broker_behavior.feature:36[0m
+    [32mGiven[0m [32mthe circuit breaker is "Open"[0m                                                       [1;30m# broker_test.go:989 -> *testContext[0m
+    [32mAnd[0m [32mthe timeout of 5 seconds has passed[0m                                                   [1;30m# broker_test.go:990 -> *testContext[0m
+    [32mWhen[0m [32ma new push attempt is "Successful"[0m                                                   [1;30m# broker_test.go:991 -> *testContext[0m
+Purged storage directory: ../data/messages
+    [31mThen[0m [31mthe circuit breaker should transition to "Half-Open"[0m                                 [1;30m# broker_test.go:992 -> *testContext[0m
+    [1;31mtimeout waiting for circuit breaker state Half-Open (last was Open (1/3 failures))[0m
+    [36mAnd[0m [36mthen finally transition to "Closed"[0m                                                   [1;30m# broker_test.go:993 -> *testContext[0m
+    [36mAnd[0m [36mthe message should be persisted and queued normally[0m                                   [1;30m# broker_test.go:994 -> *testContext[0m
+Broker down during accessibility check, attempting auto-start...
+Waiting for server at http://localhost:8081/api/health to become healthy...
+  Attempt 1: server not ready yet...
+  Server is healthy at http://localhost:8081/api/health
+Waiting for server at http://localhost:8081/api/health to become healthy...
+  Server is healthy at http://localhost:8081/api/health
+
+  [1;37mScenario:[0m Happy Path - gRPC Communication                                                   [1;30m# broker_behavior.feature:44[0m
+    [32mWhen[0m [32mthe producer sends message "GRPC-001" with payload "Hello gRPC" via gRPC[0m             [1;30m# broker_test.go:996 -> *testContext[0m
+C:\Users\KAINE\Documents\Development\message_broker_sendiri\data\messages\GRPC-001.json
+    [32mThen[0m [32mthe message "GRPC-001" should be stored in "../data/messages/GRPC-001.json"[0m          [1;30m# broker_test.go:975 -> *testContext[0m
+    [32mAnd[0m [32mwhen the consumer requests a message via gRPC[0m                                         [1;30m# broker_test.go:997 -> *testContext[0m
+    [32mThen[0m [32mthe consumer should receive message "GRPC-001" via gRPC[0m                              [1;30m# broker_test.go:998 -> *testContext[0m
+Broker down during accessibility check, attempting auto-start...
+Waiting for server at http://localhost:8081/api/health to become healthy...
+  Attempt 1: server not ready yet...
+  Server is healthy at http://localhost:8081/api/health
+Waiting for server at http://localhost:8081/api/health to become healthy...
+  Server is healthy at http://localhost:8081/api/health
+
+  [1;37mScenario:[0m Happy Path - HTTP REST API                                                            [1;30m# broker_behavior.feature:50[0m
+    [32mWhen[0m [32mthe producer sends message "HTTP-001" with payload "Hello HTTP" via POST "/api/messages"[0m [1;30m# broker_test.go:1000 -> *testContext[0m
+    [32mThen[0m [32mthe server should respond with status 201[0m                                                [1;30m# broker_test.go:1001 -> *testContext[0m
+C:\Users\KAINE\Documents\Development\message_broker_sendiri\data\messages\HTTP-001.json
+    [32mAnd[0m [32mthe message "HTTP-001" should be stored in "../data/messages/HTTP-001.json"[0m               [1;30m# broker_test.go:975 -> *testContext[0m
+    [32mWhen[0m [32mthe consumer requests a message via GET "/api/messages"[0m                                  [1;30m# broker_test.go:1002 -> *testContext[0m
+    [32mThen[0m [32mthe consumer should receive message "HTTP-001" via HTTP[0m                                  [1;30m# broker_test.go:1003 -> *testContext[0m
+Broker down during accessibility check, attempting auto-start...
+Waiting for server at http://localhost:8081/api/health to become healthy...
+  Attempt 1: server not ready yet...
+  Server is healthy at http://localhost:8081/api/health
+Waiting for server at http://localhost:8081/api/health to become healthy...
+  Server is healthy at http://localhost:8081/api/health
+
+  [1;37mScenario:[0m Structured Payload - JSON Handling                                                [1;30m# broker_behavior.feature:57[0m
+    [32mWhen[0m [32mthe producer sends the following JSON payload via gRPC:[0m                              [1;30m# broker_test.go:1010 -> *testContext[0m
+      [36m"""[0m
+      [36m{[0m
+      [36m  "id": "JSON-001",[0m
+      [36m  "payload": {[0m
+      [36m    "event": "user_signup",[0m
+      [36m    "data": {"user_id": 42, "role": "admin"}[0m
+      [36m  }[0m
+      [36m}[0m
+      [36m"""[0m
+C:\Users\KAINE\Documents\Development\message_broker_sendiri\data\messages\JSON-001.json
+    [32mThen[0m [32mthe message "JSON-001" should be stored in "../data/messages/JSON-001.json"[0m          [1;30m# broker_test.go:975 -> *testContext[0m
+    [32mAnd[0m [32mwhen the consumer requests a message via gRPC[0m                                         [1;30m# broker_test.go:997 -> *testContext[0m
+    [32mThen[0m [32mthe consumer should receive message "JSON-001" via gRPC[0m                              [1;30m# broker_test.go:998 -> *testContext[0m
+Broker down during accessibility check, attempting auto-start...
+Waiting for server at http://localhost:8081/api/health to become healthy...
+  Attempt 1: server not ready yet...
+  Server is healthy at http://localhost:8081/api/health
+Waiting for server at http://localhost:8081/api/health to become healthy...
+  Server is healthy at http://localhost:8081/api/health
+
+  [1;37mScenario:[0m Dashboard - Real-time Visualization                                               [1;30m# broker_behavior.feature:72[0m
+    [32mGiven[0m [32mthe dashboard is accessible[0m                                                         [1;30m# broker_test.go:1005 -> *testContext[0m
+    [32mWhen[0m [32ma producer pushes a message "DASH-001" via gRPC[0m                                      [1;30m# broker_test.go:1006 -> *testContext[0m
+    [32mThen[0m [32mthe dashboard stats should show queue size as 1[0m                                      [1;30m# broker_test.go:1007 -> *testContext[0m
+    [32mAnd[0m [32mwhen a consumer pops a message via HTTP[0m                                               [1;30m# broker_test.go:1008 -> *testContext[0m
+    [32mThen[0m [32mthe dashboard stats should show queue size as 0[0m                                      [1;30m# broker_test.go:1007 -> *testContext[0m
+Broker down during accessibility check, attempting auto-start...
+Waiting for server at http://localhost:8081/api/health to become healthy...
+  Attempt 1: server not ready yet...
+  Server is healthy at http://localhost:8081/api/health
+Waiting for server at http://localhost:8081/api/health to become healthy...
+  Server is healthy at http://localhost:8081/api/health
+
+  [1;37mScenario:[0m Active Delivery - Automatic Push to Target                                        [1;30m# broker_behavior.feature:79[0m
+    [32mGiven[0m [32mthe broker has a registered target "http://localhost:9590/webhook"[0m                  [1;30m# broker_test.go:1012 -> *testContext[0m
+    [32mAnd[0m [32ma mock server is listening at "http://localhost:9590/webhook"[0m                         [1;30m# broker_test.go:1014 -> *testContext[0m
+    [32mWhen[0m [32ma producer pushes a message "PUSH-001" with payload "AutoDelivery"[0m                   [1;30m# broker_test.go:974 -> *testContext[0m
+    [32mThen[0m [32mthe mock server should receive message "PUSH-001"[0m                                    [1;30m# broker_test.go:1015 -> *testContext[0m
+Waiting for message PUSH-001 to be deleted from queue (timeout 5s)...
+  Polling queue size: 0
+    [32mAnd[0m [32mthe message "PUSH-001" should eventually be deleted from the queue[0m                    [1;30m# broker_test.go:1018 -> *testContext[0m
+Broker down during accessibility check, attempting auto-start...
+Waiting for server at http://localhost:8081/api/health to become healthy...
+  Attempt 1: server not ready yet...
+  Server is healthy at http://localhost:8081/api/health
+Waiting for server at http://localhost:8081/api/health to become healthy...
+  Server is healthy at http://localhost:8081/api/health
+
+  [1;37mScenario:[0m Active Delivery - Exponential Backoff on Failure                                  [1;30m# broker_behavior.feature:86[0m
+    [32mGiven[0m [32mthe broker has a registered target "http://localhost:9591/fail"[0m                     [1;30m# broker_test.go:1012 -> *testContext[0m
+    [32mAnd[0m [32ma mock server at "http://localhost:9591/fail" returns 500 error[0m                       [1;30m# broker_test.go:1019 -> *testContext[0m
+    [32mWhen[0m [32ma producer pushes a message "RETRY-001" with payload "FailTarget"[0m                    [1;30m# broker_test.go:974 -> *testContext[0m
+    [32mThen[0m [32mthe message "RETRY-001" should stay in the queue[0m                                     [1;30m# broker_test.go:1020 -> *testContext[0m
+Waiting for message RETRY-001 retry count to be 1 (timeout 5s)...
+  Polling retry count for RETRY-001: 1
+    [32mAnd[0m [32mits "RetryCount" should be 1[0m                                                          [1;30m# broker_test.go:1021 -> *testContext[0m
+Waiting for message RETRY-001 NextRetry update (timeout 5s)...
+  NextRetry set successfully: 1775044187
+Purged storage directory: ../data/messages
+    [32mAnd[0m [32mits "NextRetry" should be set according to exponential backoff[0m                        [1;30m# broker_test.go:1022 -> *testContext[0m
+Broker down during accessibility check, attempting auto-start...
+Waiting for server at http://localhost:8081/api/health to become healthy...
+  Attempt 1: server not ready yet...
+  Server is healthy at http://localhost:8081/api/health
+Waiting for server at http://localhost:8081/api/health to become healthy...
+  Server is healthy at http://localhost:8081/api/health
+
+  [1;37mScenario:[0m Active Delivery via gRPC                                                          [1;30m# broker_behavior.feature:94[0m
+    [32mGiven[0m [32mthe broker is initialized with an empty queue[0m                                       [1;30m# broker_test.go:972 -> *testContext[0m
+    [32mAnd[0m [32ma mock server is listening at "grpc://localhost:55052"[0m                                [1;30m# broker_test.go:1014 -> *testContext[0m
+    [32mAnd[0m [32mthe broker has a registered target "grpc://localhost:55052"[0m                           [1;30m# broker_test.go:1012 -> *testContext[0m
+    [32mWhen[0m [32ma producer pushes a message "TX-GRPC" with payload "Hello gRPC"[0m                      [1;30m# broker_test.go:974 -> *testContext[0m
+    [32mThen[0m [32mthe mock server should receive message "TX-GRPC"[0m                                     [1;30m# broker_test.go:1015 -> *testContext[0m
+Waiting for message TX-GRPC to be deleted from queue (timeout 5s)...
+  Polling queue size: 0
+    [32mAnd[0m [32mthe message "TX-GRPC" should eventually be deleted from the queue[0m                     [1;30m# broker_test.go:1018 -> *testContext[0m
+Broker down during accessibility check, attempting auto-start...
+Waiting for server at http://localhost:8081/api/health to become healthy...
+  Attempt 1: server not ready yet...
+  Server is healthy at http://localhost:8081/api/health
+Waiting for server at http://localhost:8081/api/health to become healthy...
+  Server is healthy at http://localhost:8081/api/health
+
+  [1;37mScenario:[0m Dead Letter Queue - Max Retries Reached                                                          [1;30m# broker_behavior.feature:102[0m
+    [32mGiven[0m [32mthe broker has a registered target "http://localhost:9592/dead"[0m                                    [1;30m# broker_test.go:1012 -> *testContext[0m
+    [32mAnd[0m [32ma mock server at "http://localhost:9592/dead" always returns 500 error[0m                               [1;30m# broker_test.go:1028 -> *testContext[0m
+    [32mAnd[0m [32mthe configuration has max_retries set to 3[0m                                                           [1;30m# broker_test.go:1024 -> *testContext[0m
+    [32mWhen[0m [32ma producer pushes a message "DEAD-001" with payload "ToDLQ"[0m                                         [1;30m# broker_test.go:974 -> *testContext[0m
+Waiting for message DEAD-001 to appear in DLQ: C:\Users\KAINE\Documents\Development\message_broker_sendiri\data\dead_letter\DEAD-001.json
+  Message DEAD-001 found in DLQ
+    [32mThen[0m [32mthe message "DEAD-001" should eventually be moved to DLQ folder "../data/dead_letter/DEAD-001.json"[0m [1;30m# broker_test.go:1025 -> *testContext[0m
+    [32mAnd[0m [32mthe message "DEAD-001" should be removed from the main queue[0m                                         [1;30m# broker_test.go:1026 -> *testContext[0m
+    [32mAnd[0m [32mthe dashboard stats should show dlq size as 1[0m                                                        [1;30m# broker_test.go:1027 -> *testContext[0m
+Purged storage directory: ../data/dead_letter
+    [32mAnd[0m [32ma mock server at "http://localhost:9092" always returns 500 error[0m                                    [1;30m# broker_test.go:1028 -> *testContext[0m
+Broker down during accessibility check, attempting auto-start...
+Waiting for server at http://localhost:8081/api/health to become healthy...
+  Attempt 1: server not ready yet...
+  Server is healthy at http://localhost:8081/api/health
+Waiting for server at http://localhost:8081/api/health to become healthy...
+  Server is healthy at http://localhost:8081/api/health
+
+  [1;37mScenario:[0m Selective Routing - Delivery to a Named Target                                      [1;30m# broker_behavior.feature:112[0m
+    [32mGiven[0m [32mthe broker has the following registered targets:[0m                                      [1;30m# broker_test.go:1013 -> *testContext[0m
+      | [36mName[0m          | [36mURL[0m                           |
+      | [36mauth-service[0m  | [36mhttp://localhost:9590/webhook[0m |
+      | [36mnotify-system[0m | [36mhttp://localhost:9591/fail[0m    |
+    [32mAnd[0m [32ma mock server is listening at "http://localhost:9590/webhook"[0m                           [1;30m# broker_test.go:1014 -> *testContext[0m
+    [32mAnd[0m [32ma mock server is listening at "http://localhost:9591/fail"[0m                              [1;30m# broker_test.go:1014 -> *testContext[0m
+    [32mWhen[0m [32ma producer pushes a message "SELECT-001" with target "auth-service"[0m                    [1;30m# broker_test.go:1017 -> *testContext[0m
+    [32mThen[0m [32mthe mock server should receive message "SELECT-001"[0m                                    [1;30m# broker_test.go:1015 -> *testContext[0m
+    [32mAnd[0m [32mthe mock server at "http://localhost:9591/fail" should NOT receive message "SELECT-001"[0m [1;30m# broker_test.go:1016 -> *testContext[0m
+Waiting for message SELECT-001 to be deleted from queue (timeout 5s)...
+  Polling queue size: 0
+    [32mAnd[0m [32mthe message "SELECT-001" should eventually be deleted from the queue[0m                    [1;30m# broker_test.go:1018 -> *testContext[0m
+
+--- [31mFailed steps:[0m
+
+  [31mScenario: Circuit Breaker - Self-Healing[0m [1;30m# broker_behavior.feature:36[0m
+    [31mThen the circuit breaker should transition to "Half-Open"[0m [1;30m# broker_behavior.feature:40[0m
+      [31mError: [0m[1;31mtimeout waiting for circuit breaker state Half-Open (last was Open (1/3 failures))[0m
+
+
+13 scenarios ([32m12 passed[0m, [31m1 failed[0m)
+113 steps ([32m110 passed[0m, [31m1 failed[0m, [36m2 skipped[0m)
+1m53.2603208s
+flag provided but not defined: -godog.tags
+Usage of C:\Users\KAINE\AppData\Local\Temp\go-build2950461175\b001\features.test.exe:
+  -test.bench regexp
+    	run only benchmarks matching regexp
+  -test.benchmem
+    	print memory allocations for benchmarks
+  -test.benchtime d
+    	run each benchmark for duration d or N times if `d` is of the form Nx (default 1s)
+  -test.blockprofile file
+    	write a goroutine blocking profile to file
+  -test.blockprofilerate rate
+    	set blocking profile rate (see runtime.SetBlockProfileRate) (default 1)
+  -test.count n
+    	run tests and benchmarks n times (default 1)
+  -test.coverprofile file
+    	write a coverage profile to file
+  -test.cpu list
+    	comma-separated list of cpu counts to run each test with
+  -test.cpuprofile file
+    	write a cpu profile to file
+  -test.failfast
+    	do not start new tests after the first test failure
+  -test.fullpath
+    	show full file names in error messages
+  -test.fuzz regexp
+    	run the fuzz test matching regexp
+  -test.fuzzcachedir string
+    	directory where interesting fuzzing inputs are stored (for use only by cmd/go)
+  -test.fuzzminimizetime value
+    	time to spend minimizing a value after finding a failing input (default 1m0s)
+  -test.fuzztime value
+    	time to spend fuzzing; default is to run indefinitely
+  -test.fuzzworker
+    	coordinate with the parent process to fuzz random values (for use only by cmd/go)
+  -test.gocoverdir string
+    	write coverage intermediate files to this directory
+  -test.list regexp
+    	list tests, examples, and benchmarks matching regexp then exit
+  -test.memprofile file
+    	write an allocation profile to file
+  -test.memprofilerate rate
+    	set memory allocation profiling rate (see runtime.MemProfileRate)
+  -test.mutexprofile string
+    	write a mutex contention profile to the named file after execution
+  -test.mutexprofilefraction int
+    	if >= 0, calls runtime.SetMutexProfileFraction() (default 1)
+  -test.outputdir dir
+    	write profiles to dir
+  -test.paniconexit0
+    	panic on call to os.Exit(0)
+  -test.parallel n
+    	run at most n tests in parallel (default 12)
+  -test.run regexp
+    	run only tests and examples matching regexp
+  -test.short
+    	run smaller test suite to save time
+  -test.shuffle string
+    	randomize the execution order of tests and benchmarks (default "off")
+  -test.skip regexp
+    	do not list or run tests matching regexp
+  -test.testlogfile file
+    	write test action log to file (for use only by cmd/go)
+  -test.timeout d
+    	panic test binary after duration d (default 0, timeout disabled)
+  -test.trace file
+    	write an execution trace to file
+  -test.v
+    	verbose: print additional output
+FAIL	mbg/features	113.629s
+FAIL

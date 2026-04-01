@@ -22,15 +22,15 @@ import (
 type Dispatcher[T any] struct {
 	broker      *Broker[T]
 	cfg         *config.Config
-	cb          circuitbreaker.CircuitBreaker
+	cb          *circuitbreaker.CircuitBreaker
 	client      *http.Client
 	mu          sync.RWMutex
-	targets     []string
+	targets     []config.TargetConfig
 	taskChan    chan models.Message[T]
 	inProgress  sync.Map // Track messages currently being handled by workers
 }
 
-func NewDispatcher[T any](b *Broker[T], cfg *config.Config, cb circuitbreaker.CircuitBreaker) *Dispatcher[T] {
+func NewDispatcher[T any](b *Broker[T], cfg *config.Config, cb *circuitbreaker.CircuitBreaker) *Dispatcher[T] {
 	return &Dispatcher[T]{
 		broker:   b,
 		cfg:      cfg,
@@ -41,16 +41,16 @@ func NewDispatcher[T any](b *Broker[T], cfg *config.Config, cb circuitbreaker.Ci
 	}
 }
 
-func (d *Dispatcher[T]) AddTarget(target string) {
+func (d *Dispatcher[T]) AddTarget(target config.TargetConfig) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.targets = append(d.targets, target)
 }
 
-func (d *Dispatcher[T]) getTargets() []string {
+func (d *Dispatcher[T]) getTargets() []config.TargetConfig {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	targets := make([]string, len(d.targets))
+	targets := make([]config.TargetConfig, len(d.targets))
 	copy(targets, d.targets)
 	return targets
 }
@@ -110,24 +110,35 @@ func (d *Dispatcher[T]) fillTaskQueue() {
 }
 
 func (d *Dispatcher[T]) processMessage(msg models.Message[T]) {
-	targets := d.getTargets()
-	if len(targets) == 0 {
+	allTargets := d.getTargets()
+	if len(allTargets) == 0 {
 		return
 	}
 
-	// Sesuai desain Competing Consumers: Kita kirim ke SALAH SATU target (Round-robin/First success)
-	// Namun jika Anda ingin kirim ke SEMUA, kita bisa iterasi. 
-	// RabbitMQ biasanya mengirim ke satu consumer per pesan.
-	// Di sini kita coba kirim ke target pertama yang sukses.
-	
+	// Filter targets if msg.Target is specified
+	var targets []config.TargetConfig
+	if msg.Target != "" {
+		for _, t := range allTargets {
+			if t.Name == msg.Target {
+				targets = append(targets, t)
+			}
+		}
+		if len(targets) == 0 {
+			fmt.Printf(" [Warning] Targeted delivery failed: No target named '%s' found. Falling back to default.\n", msg.Target)
+			targets = allTargets
+		}
+	} else {
+		targets = allTargets
+	}
+
 	var lastErr error
 	for _, target := range targets {
-		err := d.cb(func() error {
+		err := d.cb.Execute(func() error {
 			return d.sendToTarget(target, msg)
 		})
 
 		if err == nil {
-			fmt.Printf(" [Success] Message %s delivered to %s\n", msg.ID, target)
+			fmt.Printf(" [Success] Message %s delivered to %s (%s)\n", msg.ID, target.Name, target.URL)
 			d.broker.Acknowledge(msg.ID)
 			return
 		}
@@ -139,13 +150,13 @@ func (d *Dispatcher[T]) processMessage(msg models.Message[T]) {
 	d.handleFailure(msg, lastErr)
 }
 
-func (d *Dispatcher[T]) sendToTarget(target string, msg models.Message[T]) error {
-	if strings.HasPrefix(target, "grpc://") {
-		return d.sendToGRPCTarget(strings.TrimPrefix(target, "grpc://"), msg)
+func (d *Dispatcher[T]) sendToTarget(target config.TargetConfig, msg models.Message[T]) error {
+	if strings.HasPrefix(target.URL, "grpc://") {
+		return d.sendToGRPCTarget(strings.TrimPrefix(target.URL, "grpc://"), msg)
 	}
 
 	// Default to HTTP
-	return d.sendToHTTPTarget(target, msg)
+	return d.sendToHTTPTarget(target.URL, msg)
 }
 
 func (d *Dispatcher[T]) sendToHTTPTarget(target string, msg models.Message[T]) error {
@@ -221,4 +232,21 @@ func (d *Dispatcher[T]) handleFailure(msg models.Message[T], err error) {
 
 	fmt.Printf(" [Retry] Message %s rescheduled in %ds (attempt %d)\n", msg.ID, backoff, msg.RetryCount)
 	d.broker.Update(msg)
+}
+
+func (d *Dispatcher[T]) Reset() {
+	d.cb.Reset()
+	d.inProgress = sync.Map{}
+}
+
+func (d *Dispatcher[T]) GetCBState() string {
+	return d.cb.GetState()
+}
+
+func (d *Dispatcher[T]) GetCBMetrics() (int, int) {
+	return d.cb.GetMetrics()
+}
+
+func (d *Dispatcher[T]) ResetConfig(threshold int, timeout time.Duration) {
+	d.cb.ResetConfig(threshold, timeout)
 }

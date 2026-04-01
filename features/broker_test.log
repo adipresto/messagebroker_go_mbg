@@ -2,18 +2,14 @@ Recovering messages from: ./data/messages (Absolute: C:\Users\KAINE\Documents\De
 Successfully recovered 0 messages
 Dispatcher started with RabbitMQ-style Competing Consumers...
  [Worker 0] ready
- [Worker 2] ready
- [Worker 4] ready
- [Worker 3] ready
  [Worker 1] ready
-2026/04/01 10:53:05 Starting HTTP & Dashboard server on http://localhost:8081
-2026/04/01 10:53:05 Starting gRPC server on port 50051
- [Failure] Message DEAD-001 failed for all targets: target returned status: 500
- [Retry] Message DEAD-001 rescheduled in 2s (attempt 1)
- [Failure] Message DEAD-001 failed for all targets: target returned status: 500
- [Retry] Message DEAD-001 rescheduled in 4s (attempt 2)
- [Failure] Message DEAD-001 failed for all targets: target returned status: 500
- [Retry] Message DEAD-001 rescheduled in 8s (attempt 3)
- [Failure] Message DEAD-001 failed for all targets: target returned status: 500
- [!] Message DEAD-001 reached MAX retries (3). Moving to DLQ.
- [DLQ] Message DEAD-001 moved to dead letter queue
+ [Worker 3] ready
+ [Worker 4] ready
+ [Worker 2] ready
+2026/04/01 18:50:18 Starting HTTP & Dashboard server on http://localhost:8081
+2026/04/01 18:50:18 Starting gRPC server on port 50051
+ [CB] Config Reset: Threshold=3, Timeout=5s
+ [CB] Config Reset: Threshold=3, Timeout=5s
+ [CB] Config Reset: Threshold=3, Timeout=5s
+ [CB] Config Reset: Threshold=3, Timeout=5s
+ [Success] Message SELECT-001 delivered to auth-service (http://localhost:9590/webhook)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io/fs"
 	"log"
+	"mbg/config"
 	"mbg/models"
 	"mbg/pkg/broker"
 	"net/http"
@@ -48,10 +49,23 @@ func (s *HTTPServer) broadcastStats() {
 	defer s.mu.Unlock()
 
 	queueSize, dlqSize := s.broker.GetStats()
+	cbState := s.broker.GetCBState()
+	cbFailures, cbThreshold := s.broker.GetCBMetrics()
+
+	// If dispatcher has its own overrides or state to report, we could check here,
+	// but since they share the same CB instance, broker is sufficient.
+	if s.dispatcher != nil {
+		cbState = s.dispatcher.GetCBState()
+		cbFailures, cbThreshold = s.dispatcher.GetCBMetrics()
+	}
+
 	stats := map[string]interface{}{
-		"queue_size": queueSize,
-		"dlq_size":   dlqSize,
-		"timestamp":  time.Now().Unix(),
+		"queue_size":   queueSize,
+		"dlq_size":     dlqSize,
+		"cb_state":     cbState,
+		"cb_failures":  cbFailures,
+		"cb_threshold": cbThreshold,
+		"timestamp":    time.Now().Unix(),
 	}
 
 	data, _ := json.Marshal(stats)
@@ -73,6 +87,9 @@ func (s *HTTPServer) Handler() http.Handler {
 	mux.HandleFunc("GET /api/stats", s.handleStats)
 	mux.HandleFunc("GET /api/health", s.handleHealth)
 	mux.HandleFunc("POST /api/targets", s.handleRegisterTarget)
+	mux.HandleFunc("POST /api/reset", s.handleReset)
+	mux.HandleFunc("POST /api/test/storage-path", s.handleSetStoragePath)
+	mux.HandleFunc("POST /api/test/config", s.handleSetConfig)
 
 	// WebSocket
 	mux.HandleFunc("/ws", s.handleWS)
@@ -120,10 +137,21 @@ func (s *HTTPServer) handleAll(w http.ResponseWriter, r *http.Request) {
 
 func (s *HTTPServer) handleStats(w http.ResponseWriter, r *http.Request) {
 	queueSize, dlqSize := s.broker.GetStats()
-	stats := map[string]interface{}{
-		"queue_size": queueSize,
-		"dlq_size":   dlqSize,
+	cbState := s.broker.GetCBState()
+	cbFailures, cbThreshold := s.broker.GetCBMetrics()
+
+	if s.dispatcher != nil {
+		cbState = s.dispatcher.GetCBState()
+		cbFailures, cbThreshold = s.dispatcher.GetCBMetrics()
 	}
+	stats := map[string]interface{}{
+		"queue_size":   queueSize,
+		"dlq_size":     dlqSize,
+		"cb_state":     cbState,
+		"cb_failures":  cbFailures,
+		"cb_threshold": cbThreshold,
+	}
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(stats)
 }
 
@@ -162,19 +190,70 @@ func (s *HTTPServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *HTTPServer) handleRegisterTarget(w http.ResponseWriter, r *http.Request) {
+	var body config.TargetConfig
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if body.Name == "" || body.URL == "" {
+		http.Error(w, "name and url are required", http.StatusBadRequest)
+		return
+	}
+
+	if s.dispatcher != nil {
+		s.dispatcher.AddTarget(body)
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]string{
+			"status": "target registered", 
+			"name":   body.Name,
+			"url":    body.URL,
+		})
+	} else {
+		http.Error(w, "dispatcher not initialized", http.StatusInternalServerError)
+	}
+}
+
+func (s *HTTPServer) handleReset(w http.ResponseWriter, r *http.Request) {
+	s.broker.Reset()
+	if s.dispatcher != nil {
+		s.dispatcher.Reset()
+	}
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "system reset"})
+}
+
+func (s *HTTPServer) handleSetStoragePath(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Target string `json:"target"`
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.broker.SetStoragePath(body.Path)
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "storage path updated", "new_path": body.Path})
+}
+
+func (s *HTTPServer) handleSetConfig(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Threshold int `json:"threshold"`
+		Timeout   int `json:"timeout_seconds"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
+	s.broker.ResetConfig(body.Threshold, time.Duration(body.Timeout)*time.Second)
 	if s.dispatcher != nil {
-		s.dispatcher.AddTarget(body.Target)
-		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(map[string]string{"status": "target registered", "target": body.Target})
-	} else {
-		http.Error(w, "dispatcher not initialized", http.StatusInternalServerError)
+		s.dispatcher.ResetConfig(body.Threshold, time.Duration(body.Timeout)*time.Second)
 	}
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":    "config updated",
+		"threshold": body.Threshold,
+		"timeout":   body.Timeout,
+	})
 }

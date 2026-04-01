@@ -32,7 +32,7 @@ func main() {
 		cfg.CircuitBreaker.Threshold,
 		time.Duration(cfg.CircuitBreaker.TimeoutSeconds)*time.Second,
 	)
-	b := broker.NewBroker[string](cfg.Broker.StoragePath, cfg.Broker.DeadLetterPath)
+	b := broker.NewBroker[string](cfg.Broker.StoragePath, cfg.Broker.DeadLetterPath, cb)
 
 	// 3. Setup Dispatcher (Active Delivery)
 	disp := broker.NewDispatcher(b, cfg, cb)
@@ -61,7 +61,7 @@ func main() {
 
 	// 5. Start HTTP & Dashboard Server
 	httpServer := server.NewHTTPServer(b, disp)
-	
+
 	// Start WebSocket streaming loop in background
 	go httpServer.StartStreaming()
 

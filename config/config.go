@@ -20,11 +20,16 @@ type Config struct {
 		TimeoutSeconds int `yaml:"timeout_seconds"`
 	} `yaml:"circuit_breaker"`
 	Dispatcher struct {
-		Targets        []string `yaml:"targets"`
-		MaxRetries     int      `yaml:"max_retries"`
-		BaseInterval   int      `yaml:"base_interval_seconds"`
-		WorkerCount    int      `yaml:"worker_count"`
+		Targets        []TargetConfig `yaml:"targets"`
+		MaxRetries     int            `yaml:"max_retries"`
+		BaseInterval   int            `yaml:"base_interval_seconds"`
+		WorkerCount    int            `yaml:"worker_count"`
 	} `yaml:"dispatcher"`
+}
+
+type TargetConfig struct {
+	Name string `yaml:"name"`
+	URL  string `yaml:"url"`
 }
 
 func LoadConfig(path string) (*Config, error) {

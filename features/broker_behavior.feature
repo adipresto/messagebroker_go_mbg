@@ -32,6 +32,7 @@ Feature: Message Broker Reliability and Persistence
     Then the memory queue should contain 2 messages
     And the messages "TX-101" and "TX-102" should be available for consumption in the correct order
 
+  @cb-heal
   Scenario: Circuit Breaker - Self-Healing
     Given the circuit breaker is "Open"
     And the timeout of 5 seconds has passed
@@ -76,15 +77,15 @@ Feature: Message Broker Reliability and Persistence
     Then the dashboard stats should show queue size as 0
 
   Scenario: Active Delivery - Automatic Push to Target
-    Given the broker has a registered target "http://localhost:9090/webhook"
-    And a mock server is listening at "http://localhost:9090/webhook"
+    Given the broker has a registered target "http://localhost:9590/webhook"
+    And a mock server is listening at "http://localhost:9590/webhook"
     When a producer pushes a message "PUSH-001" with payload "AutoDelivery"
     Then the mock server should receive message "PUSH-001"
     And the message "PUSH-001" should eventually be deleted from the queue
 
   Scenario: Active Delivery - Exponential Backoff on Failure
-    Given the broker has a registered target "http://localhost:9091/fail"
-    And a mock server at "http://localhost:9091/fail" returns 500 error
+    Given the broker has a registered target "http://localhost:9591/fail"
+    And a mock server at "http://localhost:9591/fail" returns 500 error
     When a producer pushes a message "RETRY-001" with payload "FailTarget"
     Then the message "RETRY-001" should stay in the queue
     And its "RetryCount" should be 1
@@ -92,17 +93,30 @@ Feature: Message Broker Reliability and Persistence
 
   Scenario: Active Delivery via gRPC
     Given the broker is initialized with an empty queue
-    And a mock server is listening at "grpc://localhost:50052"
-    And the broker has a registered target "grpc://localhost:50052"
+    And a mock server is listening at "grpc://localhost:55052"
+    And the broker has a registered target "grpc://localhost:55052"
     When a producer pushes a message "TX-GRPC" with payload "Hello gRPC"
     Then the mock server should receive message "TX-GRPC"
     And the message "TX-GRPC" should eventually be deleted from the queue
 
   Scenario: Dead Letter Queue - Max Retries Reached
-    Given the broker has a registered target "http://localhost:9092/dead"
-    And a mock server at "http://localhost:9092/dead" always returns 500 error
+    Given the broker has a registered target "http://localhost:9592/dead"
+    And a mock server at "http://localhost:9592/dead" always returns 500 error
     And the configuration has max_retries set to 3
     When a producer pushes a message "DEAD-001" with payload "ToDLQ"
     Then the message "DEAD-001" should eventually be moved to DLQ folder "../data/dead_letter/DEAD-001.json"
     And the message "DEAD-001" should be removed from the main queue
     And the dashboard stats should show dlq size as 1
+    And a mock server at "http://localhost:9092" always returns 500 error
+
+  Scenario: Selective Routing - Delivery to a Named Target
+    Given the broker has the following registered targets:
+      | Name          | URL                            |
+      | auth-service  | http://localhost:9590/webhook  |
+      | notify-system | http://localhost:9591/fail     |
+    And a mock server is listening at "http://localhost:9590/webhook"
+    And a mock server is listening at "http://localhost:9591/fail"
+    When a producer pushes a message "SELECT-001" with target "auth-service"
+    Then the mock server should receive message "SELECT-001"
+    And the mock server at "http://localhost:9591/fail" should NOT receive message "SELECT-001"
+    And the message "SELECT-001" should eventually be deleted from the queue

@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"iter"
 	"mbg/models"
+	"mbg/pkg/circuitbreaker"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 type Broker[T any] struct {
@@ -16,9 +18,10 @@ type Broker[T any] struct {
 	storagePath    string
 	deadLetterPath string
 	listeners      []chan struct{}
+	cb             *circuitbreaker.CircuitBreaker
 }
 
-func NewBroker[T any](storagePath string, deadLetterPath string) *Broker[T] {
+func NewBroker[T any](storagePath string, deadLetterPath string, cb *circuitbreaker.CircuitBreaker) *Broker[T] {
 	// Create directories if not exists
 	os.MkdirAll(storagePath, 0755)
 	os.MkdirAll(deadLetterPath, 0755)
@@ -28,6 +31,7 @@ func NewBroker[T any](storagePath string, deadLetterPath string) *Broker[T] {
 		storagePath:    storagePath,
 		deadLetterPath: deadLetterPath,
 		listeners:      make([]chan struct{}, 0),
+		cb:             cb,
 	}
 
 	// Load existing messages from disk on startup (Outbox Recovery)
@@ -42,13 +46,26 @@ func (b *Broker[T]) SaveToDisk(msg models.Message[T]) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filename, data, 0644)
+	if err := os.WriteFile(filename, data, 0644); err != nil {
+		return fmt.Errorf("os.WriteFile failed for path %s: %w", filename, err)
+	}
+	return nil
 }
 
 // removeFromDisk menghapus file JSON setelah diproses (Acknowledge)
 func (b *Broker[T]) RemoveFromDisk(id string) error {
-	filename := filepath.Join(b.storagePath, fmt.Sprintf("%s.json", id))
+	b.mu.RLock()
+	path := b.storagePath
+	b.mu.RUnlock()
+	filename := filepath.Join(path, fmt.Sprintf("%s.json", id))
 	return os.Remove(filename)
+}
+
+// SetStoragePath updates the storage path, useful for simulating errors in tests
+func (b *Broker[T]) SetStoragePath(path string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.storagePath = path
 }
 
 // Recover memuat ulang pesan dari storage_path saat startup
@@ -86,6 +103,15 @@ func (b *Broker[T]) Recover() {
 
 // Push menambahkan pesan ke persistensi dulu, baru ke memori (Outbox style)
 func (b *Broker[T]) Push(msg models.Message[T]) error {
+	if b.cb != nil {
+		return b.cb.Execute(func() error {
+			return b.doPush(msg)
+		})
+	}
+	return b.doPush(msg)
+}
+
+func (b *Broker[T]) doPush(msg models.Message[T]) error {
 	// 1. Simpan ke disk dulu
 	if err := b.SaveToDisk(msg); err != nil {
 		return fmt.Errorf("failed to persist message: %w", err)
@@ -299,4 +325,34 @@ func (b *Broker[T]) GetStats() (int, int) {
 	}
 
 	return queueSize, dlqSize
+}
+
+// GetCBState returns the current state of the circuit breaker.
+func (b *Broker[T]) GetCBState() string {
+	if b.cb == nil {
+		return "N/A"
+	}
+	return b.cb.GetState()
+}
+
+// GetCBMetrics returns the current failure count and threshold.
+func (b *Broker[T]) GetCBMetrics() (int, int) {
+	if b.cb == nil {
+		return 0, 0
+	}
+	return b.cb.GetMetrics()
+}
+
+// ResetConfig updates the circuit breaker configuration.
+func (b *Broker[T]) ResetConfig(threshold int, timeout time.Duration) {
+	if b.cb != nil {
+		b.cb.ResetConfig(threshold, timeout)
+	}
+}
+
+// Reset resets the circuit breaker.
+func (b *Broker[T]) Reset() {
+	if b.cb != nil {
+		b.cb.Reset()
+	}
 }
