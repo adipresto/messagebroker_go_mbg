@@ -49,10 +49,10 @@ func main() {
 		cbLogPath,
 	)
 
-	b := broker.NewBroker[string](cfg.Broker.StoragePath, cfg.Broker.DeadLetterPath, storageCB)
+	b := broker.NewBroker[any](cfg.Broker.StoragePath, cfg.Broker.DeadLetterPath, storageCB)
 
 	// 3. Setup Dispatcher (Active Delivery)
-	disp := broker.NewDispatcher(b, cfg, networkCB)
+	disp := broker.NewDispatcher[any](b, cfg, networkCB)
 	if !*noDispatcher {
 		go disp.Start()
 	} else {

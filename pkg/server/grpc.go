@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"mbg/api/proto"
 	"mbg/models"
@@ -11,17 +12,17 @@ import (
 
 type GRPCServer struct {
 	proto.UnimplementedBrokerServiceServer
-	broker *broker.Broker[string]
+	broker *broker.Broker[any]
 }
 
-func NewGRPCServer(b *broker.Broker[string]) *GRPCServer {
+func NewGRPCServer(b *broker.Broker[any]) *GRPCServer {
 	return &GRPCServer{broker: b}
 }
 
 func (s *GRPCServer) Push(ctx context.Context, req *proto.PushRequest) (*proto.PushResponse, error) {
-	msg := models.Message[string]{
+	msg := models.Message[any]{
 		ID:        req.Id,
-		Payload:   req.Payload,
+		Payload:   req.Payload, // string implicitly cast to any
 		CreatedAt: time.Now().Unix(),
 	}
 
@@ -38,9 +39,21 @@ func (s *GRPCServer) Pop(ctx context.Context, req *proto.PopRequest) (*proto.Pop
 		return nil, fmt.Errorf("failed to pop message: %w", err)
 	}
 
+	var payloadStr string
+	switch v := msg.Payload.(type) {
+	case string:
+		payloadStr = v
+	case nil:
+		payloadStr = ""
+	default:
+		// If it's a structured object, marshal to JSON string for gRPC
+		data, _ := json.Marshal(v)
+		payloadStr = string(data)
+	}
+
 	return &proto.PopResponse{
 		Id:        msg.ID,
-		Payload:   msg.Payload,
+		Payload:   payloadStr,
 		CreatedAt: msg.CreatedAt,
 	}, nil
 }

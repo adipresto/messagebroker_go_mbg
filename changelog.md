@@ -2,6 +2,17 @@
 
 Semua perubahan signifikan pada proyek **Message Broker Sendiri (MBS) akan dicatat di file ini. Log ini mengikuti format [Keep a Changelog](https://keepachangelog.com/id/1.1.0/).
 
+## [0.6.0] - 2026-04-02
+
+### Added
+- **Refactoring Payload Generic (`any`)**: Migrasi seluruh sistem inti (`Broker`, `Dispatcher`, `HTTPServer`) menggunakan Go Generics dengan tipe `any` (interface{}).
+- **Dukungan Objek JSON Bersarang**: Kemampuan menerima dan mengirim objek JSON kompleks melalui REST POST/GET dan gRPC secara orisinal.
+- **Peningkatan Suite Pengujian BDD**: Sinkronisasi langkah-langkah pengujian Godog untuk memverifikasi payload terstruktur menggunakan model data yang seragam.
+
+### Fixed
+- **Perbaikan Error 400 Bad Request**: Mengatasi masalah ketidaksesuaian tipe data pada handler HTTP saat menerima payload JSON objek.
+- **Penyelarasan Binari `mbg.exe`**: Memastikan binari yang digunakan dalam pengujian selalu mencerminkan perubahan arsitektur terbaru.
+
 ## [0.5.0] - 2026-04-01
 
 ### Added

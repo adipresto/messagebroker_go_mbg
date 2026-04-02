@@ -9,7 +9,7 @@ Message Broker yang tangguh dan modern berbasis Go, dirancang untuk keandalan da
     - **gRPC**: Komunikasi antar layanan berperforma tinggi.
     - **REST API**: Integrasi mudah dengan aplikasi web dan klien HTTP.
     - **WebSocket**: *Streaming* data statistik waktu nyata.
-- **Dukungan Payload JSON Tertstruktur**: Pengiriman data kompleks melalui format JSON yang dipasangkan dengan tipe data generik.
+- **Dukungan Payload JSON Dinamis**: Pengiriman data kompleks melalui format JSON yang ditenagai oleh tipe data generik Go (`any`). Sistem ini kini mampu menangani objek JSON bersarang secara orisinal (native) tanpa perlu konversi manual.
 - **Pengiriman Otomatis (Dispatcher)**: Kemampuan mengirim payload secara otomatis ke *endpoint* eksternal target melalui HTTP maupun gRPC.
 - **Strategi Exponential Backoff**: Proses percobaan ulang (retry) yang tangguh dan adaptif pada pengiriman target yang mengalami kendala.
 - **Persistensi Data (Outbox Pattern)**: Pesan disimpan ke penyimpanan fisik sebelum masuk ke memori untuk menjamin durabilitas.

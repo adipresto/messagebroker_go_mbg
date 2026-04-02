@@ -23,13 +23,13 @@ var upgrader = websocket.Upgrader{
 }
 
 type HTTPServer struct {
-	broker     *broker.Broker[string]
-	dispatcher *broker.Dispatcher[string]
+	broker     *broker.Broker[any]
+	dispatcher *broker.Dispatcher[any]
 	mu         sync.Mutex
 	conns      map[*websocket.Conn]bool
 }
 
-func NewHTTPServer(b *broker.Broker[string], d *broker.Dispatcher[string]) *HTTPServer {
+func NewHTTPServer(b *broker.Broker[any], d *broker.Dispatcher[any]) *HTTPServer {
 	return &HTTPServer{
 		broker:     b,
 		dispatcher: d,
@@ -109,7 +109,7 @@ func (s *HTTPServer) Handler() http.Handler {
 }
 
 func (s *HTTPServer) handlePush(w http.ResponseWriter, r *http.Request) {
-	var msg models.Message[string]
+	var msg models.Message[any]
 	if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -135,7 +135,7 @@ func (s *HTTPServer) handlePop(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *HTTPServer) handleAll(w http.ResponseWriter, r *http.Request) {
-	var msgs []models.Message[string]
+	var msgs []models.Message[any]
 	for m := range s.broker.All() {
 		msgs = append(msgs, m)
 	}
@@ -222,7 +222,7 @@ func (s *HTTPServer) handleRegisterTarget(w http.ResponseWriter, r *http.Request
 		s.dispatcher.AddTarget(body)
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(map[string]string{
-			"status": "target registered", 
+			"status": "target registered",
 			"name":   body.Name,
 			"url":    body.URL,
 		})

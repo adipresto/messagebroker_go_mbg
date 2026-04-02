@@ -44,7 +44,7 @@ type testContext struct {
 	mockServers    []*httptest.Server
 	mockServerGRPC *grpc.Server
 	lastTarget     string
-	pushedMsgs     map[string][]models.Message[string] // URL -> Messages
+	pushedMsgs     map[string][]models.Message[any] // URL -> Messages
 	activeMsgID    string                              // Track the most recently pushed message ID for context
 	lastCBState    string                              // Track last state for clear error messages
 }
@@ -56,7 +56,7 @@ type mockTargetTestServer struct {
 
 func (s *mockTargetTestServer) Deliver(ctx context.Context, req *proto.DeliveryRequest) (*proto.DeliveryResponse, error) {
 	addr := "grpc://localhost:55052" // Standard test addr
-	msg := models.Message[string]{
+	msg := models.Message[any]{
 		ID:      req.Id,
 		Payload: req.Payload,
 	}
@@ -94,7 +94,7 @@ func (c *testContext) reset() {
 		c.mockServerGRPC.Stop()
 		c.mockServerGRPC = nil
 	}
-	c.pushedMsgs = make(map[string][]models.Message[string])
+	c.pushedMsgs = make(map[string][]models.Message[any])
 	c.lastTarget = ""
 	if c.grpcConn != nil {
 		c.grpcConn.Close()
@@ -233,7 +233,7 @@ func (c *testContext) theCircuitBreakerIsClosed() error {
 	return nil
 }
 func (c *testContext) aProducerPushesAMessageWithPayload(id, payload string) error {
-	msg := models.Message[string]{ID: id, Payload: payload}
+	msg := models.Message[any]{ID: id, Payload: payload}
 	c.activeMsgID = id // Save to context
 	data, _ := json.Marshal(msg)
 	url := fmt.Sprintf("%s/api/messages", c.httpBaseURL)
@@ -246,7 +246,7 @@ func (c *testContext) aProducerPushesAMessageWithPayload(id, payload string) err
 }
 
 func (c *testContext) aProducerPushesAMessageWithTarget(id, target string) error {
-	msg := models.Message[string]{ID: id, Payload: "Target test", Target: target}
+	msg := models.Message[any]{ID: id, Payload: "Target test", Target: target}
 	c.activeMsgID = id
 	data, _ := json.Marshal(msg)
 	url := fmt.Sprintf("%s/api/messages", c.httpBaseURL)
@@ -394,7 +394,7 @@ func (c *testContext) theCircuitBreakerShouldTransitionToState(expected string) 
 }
 
 func (c *testContext) subsequentPushAttemptsShouldFailImmediatelyWithError(errMsg string) error {
-	msg := models.Message[string]{ID: "SUB-FAIL", Payload: "ShouldFail"}
+	msg := models.Message[any]{ID: "SUB-FAIL", Payload: "ShouldFail"}
 	data, _ := json.Marshal(msg)
 	url := fmt.Sprintf("%s/api/messages", c.httpBaseURL)
 	resp, err := http.Post(url, "application/json", bytes.NewBuffer(data))
@@ -427,10 +427,10 @@ func (c *testContext) thereAreMessagesAndOnDiskIn(id1, id2, dir string) error {
 		return err
 	}
 
-	msg1 := models.Message[string]{ID: id1, Payload: "Recover 1", CreatedAt: time.Now().Unix()}
-	msg2 := models.Message[string]{ID: id2, Payload: "Recover 2", CreatedAt: time.Now().Unix()}
+	msg1 := models.Message[any]{ID: id1, Payload: "Recover 1", CreatedAt: time.Now().Unix()}
+	msg2 := models.Message[any]{ID: id2, Payload: "Recover 2", CreatedAt: time.Now().Unix()}
 
-	for _, msg := range []models.Message[string]{msg1, msg2} {
+	for _, msg := range []models.Message[any]{msg1, msg2} {
 		data, _ := json.Marshal(msg)
 		absPath := filepath.Join(c.storageDir, msg.ID+".json")
 		if err := os.WriteFile(absPath, data, 0644); err != nil {
@@ -576,7 +576,7 @@ func (c *testContext) theConsumerShouldReceiveMessageViaGRPC(id string) error {
 }
 
 func (c *testContext) theProducerSendsMessageViaPOST(id, payload, path string) error {
-	msg := models.Message[string]{ID: id, Payload: payload}
+	msg := models.Message[any]{ID: id, Payload: payload}
 	data, _ := json.Marshal(msg)
 	url := fmt.Sprintf("%s%s", c.httpBaseURL, path)
 	resp, err := http.Post(url, "application/json", bytes.NewBuffer(data))
@@ -649,14 +649,22 @@ func (c *testContext) theDashboardStatsShouldShowDlqSizeAs(expected int) error {
 }
 
 func (c *testContext) theProducerSendsTheFollowingJSONPayloadViaGRPC(doc *godog.DocString) error {
-	var body map[string]interface{}
-	if err := json.Unmarshal([]byte(doc.Content), &body); err != nil {
+	var msg models.Message[any]
+	if err := json.Unmarshal([]byte(doc.Content), &msg); err != nil {
 		return err
 	}
-	id := body["id"].(string)
-	payloadBytes, _ := json.Marshal(body["payload"])
 
-	req := &proto.PushRequest{Id: id, Payload: string(payloadBytes)}
+	// For gRPC, we must stringify the payload if it's not already a string
+	var payloadStr string
+	switch v := msg.Payload.(type) {
+	case string:
+		payloadStr = v
+	default:
+		data, _ := json.Marshal(v)
+		payloadStr = string(data)
+	}
+
+	req := &proto.PushRequest{Id: msg.ID, Payload: payloadStr}
 	resp, err := c.grpcClient.Push(context.Background(), req)
 	if err != nil {
 		return err
@@ -664,30 +672,24 @@ func (c *testContext) theProducerSendsTheFollowingJSONPayloadViaGRPC(doc *godog.
 	if !resp.Success {
 		return fmt.Errorf("gRPC JSON push failed: %s", resp.Message)
 	}
+	c.activeMsgID = msg.ID
 	return nil
 }
 
 func (c *testContext) theProducerSendsTheFollowingJSONPayloadViaPOST(path string, doc *godog.DocString) error {
-	var body map[string]interface{}
-	if err := json.Unmarshal([]byte(doc.Content), &body); err != nil {
+	var msg models.Message[any]
+	if err := json.Unmarshal([]byte(doc.Content), &msg); err != nil {
 		return err
 	}
-	id := body["id"].(string)
-	payloadBytes, _ := json.Marshal(body["payload"])
 
-	msg := models.Message[string]{
-		ID:      id,
-		Payload: string(payloadBytes),
-	}
 	data, _ := json.Marshal(msg)
-
 	url := fmt.Sprintf("%s%s", c.httpBaseURL, path)
 	resp, err := http.Post(url, "application/json", bytes.NewBuffer(data))
 	if err != nil {
 		return err
 	}
 	c.lastResp = resp
-	c.activeMsgID = id
+	c.activeMsgID = msg.ID
 	return nil
 }
 
@@ -752,7 +754,7 @@ func (c *testContext) aMockServerIsListeningAt(addr string) error {
 
 	// HTTP Implementation
 	mockSrv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var msg models.Message[string]
+		var msg models.Message[any]
 		json.NewDecoder(r.Body).Decode(&msg)
 		c.pushedMsgs[addr] = append(c.pushedMsgs[addr], msg)
 		w.WriteHeader(http.StatusOK)
@@ -876,7 +878,7 @@ func (c *testContext) itsRetryCountShouldBe(count int) error {
 			if err != nil {
 				continue
 			}
-			var msgs []models.Message[string]
+			var msgs []models.Message[any]
 			json.NewDecoder(resp.Body).Decode(&msgs)
 			resp.Body.Close()
 
@@ -970,7 +972,7 @@ func (c *testContext) itsNextRetryShouldBeSetAccordingToExponentialBackoff() err
 			if err != nil {
 				continue
 			}
-			var msgs []models.Message[string]
+			var msgs []models.Message[any]
 			json.NewDecoder(resp.Body).Decode(&msgs)
 			resp.Body.Close()
 

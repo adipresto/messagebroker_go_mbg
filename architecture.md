@@ -46,8 +46,8 @@ Sistem ini kini diverifikasi menggunakan strategi pengujian terhadap objek binar
 - **Isolasi Skenario**: Setiap skenario pengujian secara dinamis memulai dan mematikan proses `mbg.exe` untuk menjamin kebersihan state antar pengujian.
 - **Validasi Durabilitas**: Pengujian memverifikasi keberadaan file JSON di `../data/messages/` untuk memastikan persistensi benar-benar terjadi sebelum respons dikembalikan ke klien.
 
-### 2. Dukungan JSON Dinamis & Multi-Target Eksternal
-Handler gRPC dan HTTP kini dirancang untuk menangani payload JSON yang lebih kompleks. Sistem dapat bertindak sebagai transportasi *Microservice* dengan dukungan *forwarding* ke berbagai rute yang terdefinisi sebelumnya menggunakan format identifikasi seperti `grpc://...`.
+### 2. Dukungan JSON Dinamis (Go Generics)
+Implementasi inti `Broker[T any]` kini menggunakan tipe data `any` yang memungkinkan sistem untuk menerima, menyimpan, dan meneruskan payload JSON apa pun secara transparan. Handler gRPC dan HTTP melayani sebagai gerbang (*gateways*) yang melakukan unmarshaling/marshaling secara otomatis ke dalam model data `models.Message[any]`, menjamin fleksibilitas tingkat tinggi tanpa mengorbankan integritas model pesan.
 
 ### 3. Kemampuan Observabilitas (Observability)
 Dasbor waktu nyata bukan hanya sekadar visualisasi, tetapi juga berfungsi sebagai titik verifikasi kesehatan sistem (*health check*) yang memantau metrik antrean secara kontinu melalui WebSockets.
