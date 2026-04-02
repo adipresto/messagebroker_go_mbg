@@ -15,7 +15,9 @@ graph TD
     subgraph "Production Runtime (mbg.exe)"
         TestClient -- "gRPC Push/Pop" --> GRPC[gRPC Service Layer]
         TestClient -- "HTTP POST/GET/Stats" --> HTTP[HTTP API Layer]
-        TestClient -- "WebSocket Sync" --> WS[WebSocket Handler]
+        TestClient -- "WebSocket Stats" --> WS[WebSocket Handler]
+        
+        WS -- "Internal Monitoring" --> Dashboard[MBG Dashboard]
         
         GRPC -- "Wrapped in CB" --> Broker[Broker Core]
         HTTP -- "Wrapped in CB" --> Broker
@@ -49,8 +51,8 @@ Sistem ini kini diverifikasi menggunakan strategi pengujian terhadap objek binar
 ### 2. Dukungan JSON Dinamis (Go Generics)
 Implementasi inti `Broker[T any]` kini menggunakan tipe data `any` yang memungkinkan sistem untuk menerima, menyimpan, dan meneruskan payload JSON apa pun secara transparan. Handler gRPC dan HTTP melayani sebagai gerbang (*gateways*) yang melakukan unmarshaling/marshaling secara otomatis ke dalam model data `models.Message[any]`, menjamin fleksibilitas tingkat tinggi tanpa mengorbankan integritas model pesan.
 
-### 3. Kemampuan Observabilitas (Observability)
-Dasbor waktu nyata bukan hanya sekadar visualisasi, tetapi juga berfungsi sebagai titik verifikasi kesehatan sistem (*health check*) yang memantau metrik antrean secara kontinu melalui WebSockets.
+### 3. Kemampuan Observabilitas (Dashboard Only)
+Dasbor waktu nyata (MBG Dashboard) bukan hanya sekadar visualisasi, tetapi juga berfungsi sebagai titik verifikasi kesehatan sistem (*health check*) yang memantau metrik antrean secara kontinu melalui WebSockets. Jalur WebSocket (`/ws`) saat ini bersifat *read-only* dan didedikasikan sepenuhnya untuk operasional Dashboard.
 
 ### 4. Automated Dispatch, Exponential Backoff & Header Support
 Sistem pengiriman sekarang secara otomatis memonitor seluruh pesan antrean yang siap untuk diteruskan (*ready to be dispatched*) menggunakan `Dispatcher` yang berjalan secara asynchronous:

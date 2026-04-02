@@ -8,7 +8,7 @@ Message Broker yang tangguh dan modern berbasis Go, dirancang untuk keandalan da
 - **Dukungan Multi-Protokol**:
     - **gRPC**: Komunikasi antar layanan berperforma tinggi.
     - **REST API**: Integrasi mudah dengan aplikasi web dan klien HTTP.
-    - **WebSocket**: *Streaming* data statistik waktu nyata.
+    - **WebSocket**: *Streaming* data statistik waktu nyata khusus untuk **MBG Dashboard**. Jalur ini bersifat *read-only* untuk memantau metrik antrean.
 - **Dukungan Payload JSON Dinamis**: Pengiriman data kompleks melalui format JSON yang ditenagai oleh tipe data generik Go (`any`). Sistem ini kini mampu menangani objek JSON bersarang secara orisinal (native) tanpa perlu konversi manual.
 - **Pengiriman Otomatis (Dispatcher) & Headers**: Kemampuan mengirim payload secara otomatis ke *endpoint* eksternal target melalui HTTP maupun gRPC dengan dukungan *Custom Headers*. Secara default, sistem kini hanya mengirim **field payload** sebagai body request untuk menjaga kebersihan data.
 - **Logika Header Merging & Traceability**: Mendukung pengaturan header *default* per target yang dapat ditimpa (*override*) oleh header spesifik dari masing-masing pesan. Sistem secara otomatis menyertakan `X-Message-ID` pada header untuk kemudahan pelacakan (*traceability*).
@@ -55,7 +55,7 @@ Message Broker yang tangguh dan modern berbasis Go, dirancang untuk keandalan da
 - `POST /api/targets`: Mendaftarkan target baru. Mendukung field opsional `headers` (map string to string) untuk default headers.
 
 ### WebSocket
-- `/ws`: Untuk menerima pembaharuan statistik secara *real-time*.
+- `/ws`: Khusus untuk mensuplai data ke **MBG Dashboard** secara *real-time*. Jalur ini tidak digunakan untuk pengiriman pesan dari luar (internal monitoring only).
 
 ### gRPC Service
 - `BrokerService.Push`: Mengirim pesan.

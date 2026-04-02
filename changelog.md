@@ -47,7 +47,7 @@ Semua perubahan signifikan pada proyek **Message Broker Sendiri (MBS) akan dicat
 ### Added
 
 - **Suite Pengujian E2E (End-to-End)**: Implementasi pengujian komprehensif menggunakan Godog terhadap file binari asli (`mbg.exe`).
-- **Cakupan Skenario Multi-Protokol**: Penambahan pengujian fungsional untuk gRPC Push/Pop, REST API (POST/GET), dan sinkronisasi Dashboard.
+- **Cakupan Skenario Multi-Protokol**: Penambahan pengujian fungsional untuk gRPC Push/Pop, REST API (POST/GET), dan sinkronisasi metrik **MBG Dashboard** melalui WebSocket.
 - **Dukungan Payload JSON Tertstruktur**: Kemampuan menangani data kompleks melalui gRPC dan REST.
 - **Health Check Endpoint**: Menambahkan `/api/health` untuk memverifikasi kesiapan layanan.
 - **Mekanisme Manajemen Layanan dalam Tes**: Kemampuan untuk memulai dan mematikan proses `mbg.exe` secara otomatis selama eksekusi `go test`.
@@ -58,7 +58,7 @@ Semua perubahan signifikan pada proyek **Message Broker Sendiri (MBS) akan dicat
 ### Added
 
 - **Web Dashboard & Monitoring**: Dasbor waktu nyata berbasis web (HTML/CSS/JS) dengan RxJS.
-- **Dukungan WebSocket**: *Streaming* data statistik ukuran antrean secara langsung ke dasbor melalui `/ws`.
+- **Dukungan WebSocket**: *Streaming* data statistik ukuran antrean secara langsung ke **MBG Dashboard** melalui `/ws` (Read-only).
 - **REST API Support**: Menyediakan *endpoint* `/api/messages` (POST/GET) dan `/api/stats`.
 - **Embedded Dashboard**: Seluruh aset dasbor disematkan dalam binari menggunakan `go:embed dashboard/*`.
 - **Mekanisme Internal Pub/Sub**: Fungsionalitas `Subscribe` dan `notify()` pada Broker untuk pembaruan status waktu nyata.
