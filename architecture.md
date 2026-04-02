@@ -55,7 +55,8 @@ Dasbor waktu nyata bukan hanya sekadar visualisasi, tetapi juga berfungsi sebaga
 ### 4. Automated Dispatch, Exponential Backoff & Header Support
 Sistem pengiriman sekarang secara otomatis memonitor seluruh pesan antrean yang siap untuk diteruskan (*ready to be dispatched*) menggunakan `Dispatcher` yang berjalan secara asynchronous:
 - Secara adaptif mengubah jarak waktu pengiriman ulang (*NextRetry*) berdasarkan kelipatan *Exponential Backoff* saat percobaan pertama gagal.
-- **Header Propagation**: Pengiriman pesan kini mendukung pengiriman metadata tambahan (seperti token otorisasi) melalui HTTP Headers dan gRPC Metadata.
+- **Header Propagation**: Pengiriman pesan kini mendukung pengiriman metadata tambahan (sepertitoken otorisasi) melalui HTTP Headers dan gRPC Metadata. Sistem secara otomatis menyertakan `X-Message-ID` untuk pelacakan.
+- **Payload Refinement**: Khusus untuk target HTTP, sistem kini melakukan *decoupling* antara metadata broker dan data bisnis dengan hanya mengirim field `payload` di dalam request body.
 - **Header Merging Strategy**: Sistem menggabungkan *default headers* dari konfigurasi target dengan *dynamic headers* dari payload pesan, di mana header dari pesan memiliki prioritas tertinggi.
 - Integrasi mulus yang melindungi target maupun layanan melalui limitasi yang aman via *Circuit Breaker*.
 

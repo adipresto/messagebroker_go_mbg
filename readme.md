@@ -10,8 +10,8 @@ Message Broker yang tangguh dan modern berbasis Go, dirancang untuk keandalan da
     - **REST API**: Integrasi mudah dengan aplikasi web dan klien HTTP.
     - **WebSocket**: *Streaming* data statistik waktu nyata.
 - **Dukungan Payload JSON Dinamis**: Pengiriman data kompleks melalui format JSON yang ditenagai oleh tipe data generik Go (`any`). Sistem ini kini mampu menangani objek JSON bersarang secara orisinal (native) tanpa perlu konversi manual.
-- **Pengiriman Otomatis (Dispatcher) & Headers**: Kemampuan mengirim payload secara otomatis ke *endpoint* eksternal target melalui HTTP maupun gRPC dengan dukungan *Custom Headers* (untuk Otorisasi).
-- **Logika Header Merging**: Mendukung pengaturan header *default* per target yang dapat ditimpa (*override*) oleh header spesifik dari masing-masing pesan.
+- **Pengiriman Otomatis (Dispatcher) & Headers**: Kemampuan mengirim payload secara otomatis ke *endpoint* eksternal target melalui HTTP maupun gRPC dengan dukungan *Custom Headers*. Secara default, sistem kini hanya mengirim **field payload** sebagai body request untuk menjaga kebersihan data.
+- **Logika Header Merging & Traceability**: Mendukung pengaturan header *default* per target yang dapat ditimpa (*override*) oleh header spesifik dari masing-masing pesan. Sistem secara otomatis menyertakan `X-Message-ID` pada header untuk kemudahan pelacakan (*traceability*).
 - **Strategi Exponential Backoff**: Proses percobaan ulang (retry) yang tangguh dan adaptif pada pengiriman target yang mengalami kendala.
 - **Persistensi Data (Outbox Pattern)**: Pesan disimpan ke penyimpanan fisik sebelum masuk ke memori untuk menjamin durabilitas.
 - **Circuit Breaker Robust**: Melindungi sistem pengiriman/penerimaan dengan status *Closed, Open, dan Half-Open* (Mekanisme *self-healing*).
