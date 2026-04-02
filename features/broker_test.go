@@ -76,7 +76,7 @@ func (c *testContext) purgeStorage() {
 			os.Remove(f)
 		}
 		if len(files) > 0 {
-			fmt.Printf("Purged storage directory: %s\n", p)
+			// Purged
 		}
 	}
 }
@@ -140,18 +140,15 @@ func (c *testContext) drainQueue() {
 
 func (c *testContext) waitForServer() error {
 	url := fmt.Sprintf("%s/api/health", c.httpBaseURL)
-	fmt.Printf("Waiting for server at %s to become healthy...\n", url)
 	for i := 0; i < 20; i++ {
 		resp, err := http.Get(url)
 		if err == nil && resp.StatusCode == http.StatusOK {
 			resp.Body.Close()
-			fmt.Printf("  Server is healthy at %s\n", url)
 			return nil
 		}
 		if err == nil {
 			resp.Body.Close()
 		}
-		fmt.Printf("  Attempt %d: server not ready yet...\n", i+1)
 		time.Sleep(500 * time.Millisecond)
 	}
 	return fmt.Errorf("server at %s did not become healthy in time after 10s", url)
@@ -164,7 +161,6 @@ func (c *testContext) theBrokerIsAccessibleAtHTTPAndGRPC(httpURL, grpcAddr strin
 	// Check health with a very short timeout first
 	checkConn, err := net.DialTimeout("tcp", "localhost:8081", 100*time.Millisecond)
 	if err != nil {
-		fmt.Println("Broker down during accessibility check, attempting auto-start...")
 		// Use our smart-start function to spin it up
 		if err := c.theBrokerIsStartedAndExecutes("Background Start"); err != nil {
 			return fmt.Errorf("failed to auto-start broker: %w", err)
@@ -265,7 +261,6 @@ func (c *testContext) aProducerPushesAMessageWithTarget(id, target string) error
 func (c *testContext) theMessageShouldBeStoredIn(id, path string) error {
 	// Path mapping: The feature file might use relative paths, but we will use the ID to find it in the storageDir.
 	absPath := filepath.Join(c.storageDir, id+".json")
-	fmt.Println(absPath)
 	if _, err := os.Stat(absPath); os.IsNotExist(err) {
 		return fmt.Errorf("expected file %s to exist", absPath)
 	}
@@ -359,7 +354,6 @@ func (c *testContext) theCircuitBreakerShouldTransitionToState(expected string) 
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
 
-	fmt.Printf(" [LogWatch] Waiting for state: %s in %s\n", expected, logPath)
 
 	for {
 		select {
@@ -386,7 +380,6 @@ func (c *testContext) theCircuitBreakerShouldTransitionToState(expected string) 
 							c.lastCBState = actual
 
 							if actual == expected {
-								fmt.Printf(" [LogWatch] Found state: %s\n", actual)
 								return nil
 							}
 						}
@@ -454,11 +447,9 @@ func (c *testContext) theBrokerIsStartedAndExecutes(action string) error {
 		conn, err := net.DialTimeout("tcp", "localhost:8081", 100*time.Millisecond)
 		if err == nil {
 			conn.Close()
-			fmt.Println("Broker already running at localhost:8081, skipping start for action:", action)
 			return nil
 		}
 	} else {
-		fmt.Println("Action is Recover, ensuring fresh start (killing old if any)...")
 		_ = exec.Command("taskkill", "/F", "/IM", "mbg.exe", "/T").Run()
 		time.Sleep(2 * time.Second)
 	}
@@ -475,7 +466,6 @@ func (c *testContext) theBrokerIsStartedAndExecutes(action string) error {
 	args := []string{}
 	if action == "Recover" {
 		args = append(args, "-no-dispatcher")
-		fmt.Println("Starting broker with -no-dispatcher flag for stability.")
 	}
 	cmd := exec.Command(exeAbs, args...)
 	cmd.Dir = rootAbs
@@ -677,6 +667,30 @@ func (c *testContext) theProducerSendsTheFollowingJSONPayloadViaGRPC(doc *godog.
 	return nil
 }
 
+func (c *testContext) theProducerSendsTheFollowingJSONPayloadViaPOST(path string, doc *godog.DocString) error {
+	var body map[string]interface{}
+	if err := json.Unmarshal([]byte(doc.Content), &body); err != nil {
+		return err
+	}
+	id := body["id"].(string)
+	payloadBytes, _ := json.Marshal(body["payload"])
+
+	msg := models.Message[string]{
+		ID:      id,
+		Payload: string(payloadBytes),
+	}
+	data, _ := json.Marshal(msg)
+
+	url := fmt.Sprintf("%s%s", c.httpBaseURL, path)
+	resp, err := http.Post(url, "application/json", bytes.NewBuffer(data))
+	if err != nil {
+		return err
+	}
+	c.lastResp = resp
+	c.activeMsgID = id
+	return nil
+}
+
 func (c *testContext) theBrokerHasARegisteredTarget(target string) error {
 	url := fmt.Sprintf("%s/api/targets", c.httpBaseURL)
 	// Fallback/Legacy support: Use URL as Name if name is not provided
@@ -810,7 +824,6 @@ func (c *testContext) theMessageShouldEventuallyBeDeletedFromTheQueue(id string)
 	tick := time.NewTicker(500 * time.Millisecond)
 	defer tick.Stop()
 
-	fmt.Printf("Waiting for message %s to be deleted from queue (timeout 5s)...\n", id)
 	for {
 		select {
 		case <-timeout:
@@ -825,7 +838,6 @@ func (c *testContext) theMessageShouldEventuallyBeDeletedFromTheQueue(id string)
 			json.NewDecoder(resp.Body).Decode(&stats)
 			resp.Body.Close()
 			actual := int(stats["queue_size"].(float64))
-			fmt.Printf("  Polling queue size: %d\n", actual)
 			if actual == 0 {
 				return nil
 			}
@@ -854,7 +866,6 @@ func (c *testContext) itsRetryCountShouldBe(count int) error {
 	tick := time.NewTicker(500 * time.Millisecond)
 	defer tick.Stop()
 
-	fmt.Printf("Waiting for message %s retry count to be %d (timeout 5s)...\n", id, count)
 	for {
 		select {
 		case <-timeout:
@@ -871,7 +882,6 @@ func (c *testContext) itsRetryCountShouldBe(count int) error {
 
 			for _, m := range msgs {
 				if m.ID == id {
-					fmt.Printf("  Polling retry count for %s: %d\n", id, m.RetryCount)
 					if m.RetryCount == count {
 						return nil
 					}
@@ -888,7 +898,6 @@ func (c *testContext) theMessageShouldEventuallyBeMovedToDLQFolder(id, path stri
 
 	// Path mapping
 	absPath := filepath.Join(c.dlqDir, id+".json")
-	fmt.Printf("Waiting for message %s to appear in DLQ: %s\n", id, absPath)
 
 	for {
 		select {
@@ -896,7 +905,6 @@ func (c *testContext) theMessageShouldEventuallyBeMovedToDLQFolder(id, path stri
 			return fmt.Errorf("message %s never moved to DLQ after 10s", id)
 		case <-tick.C:
 			if _, err := os.Stat(absPath); err == nil {
-				fmt.Printf("  Message %s found in DLQ\n", id)
 				return nil
 			}
 		}
@@ -952,7 +960,6 @@ func (c *testContext) itsNextRetryShouldBeSetAccordingToExponentialBackoff() err
 	tick := time.NewTicker(500 * time.Millisecond)
 	defer tick.Stop()
 
-	fmt.Printf("Waiting for message %s NextRetry update (timeout 5s)...\n", id)
 	for {
 		select {
 		case <-timeout:
@@ -970,7 +977,6 @@ func (c *testContext) itsNextRetryShouldBeSetAccordingToExponentialBackoff() err
 			for _, m := range msgs {
 				if m.ID == id {
 					if m.NextRetry > time.Now().Unix() {
-						fmt.Printf("  NextRetry set successfully: %d\n", m.NextRetry)
 						return nil
 					}
 				}
@@ -1024,6 +1030,7 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 	sc.Step(`^when a consumer pops a message via HTTP$`, tc.whenAConsumerPopsAMessage)
 
 	sc.Step(`^the producer sends the following JSON payload via gRPC:$`, tc.theProducerSendsTheFollowingJSONPayloadViaGRPC)
+	sc.Step(`^the producer sends the following JSON payload via POST "([^"]*)":$`, tc.theProducerSendsTheFollowingJSONPayloadViaPOST)
 
 	sc.Step(`^the broker has a registered target "([^"]*)"$`, tc.theBrokerHasARegisteredTarget)
 	sc.Step(`^the broker has the following registered targets:$`, tc.theBrokerHasTheFollowingRegisteredTargets)

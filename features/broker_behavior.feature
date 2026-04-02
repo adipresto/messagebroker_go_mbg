@@ -69,6 +69,22 @@ Feature: Message Broker Reliability and Persistence
     And when the consumer requests a message via gRPC
     Then the consumer should receive message "JSON-001" via gRPC
 
+  Scenario: Structured Payload - JSON Handling via HTTP
+    When the producer sends the following JSON payload via POST "/api/messages":
+      """
+      {
+        "id": "JSON-HTTP-001",
+        "payload": {
+          "event": "user_signup",
+          "data": {"user_id": 42, "role": "admin"}
+        }
+      }
+      """
+    Then the server should respond with status 201
+    And the message "JSON-HTTP-001" should be stored in "../data/messages/JSON-HTTP-001.json"
+    When the consumer requests a message via GET "/api/messages"
+    Then the consumer should receive message "JSON-HTTP-001" via HTTP
+
   Scenario: Dashboard - Real-time Visualization
     Given the dashboard is accessible
     When a producer pushes a message "DASH-001" via gRPC
