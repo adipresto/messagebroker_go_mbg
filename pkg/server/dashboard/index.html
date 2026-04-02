@@ -24,12 +24,17 @@
                 <div class="card dlq">
                     <h3>Dead Letter Queue</h3>
                     <div id="dlq-count" class="stat-value warning">0</div>
-                    <p>Failed messages requiring attention</p>
+                    <p>Failed messages in DLQ</p>
                 </div>
-                <div class="card">
-                    <h3>Last Update</h3>
-                    <div id="last-update" class="stat-value small">-</div>
-                    <p id="update-timestamp"></p>
+                <div class="card" id="storage-cb-card">
+                    <h3>Storage CB</h3>
+                    <div id="storage-cb-state" class="stat-value small">CLOSED</div>
+                    <p id="storage-cb-info">0/3 failures</p>
+                </div>
+                <div class="card" id="network-cb-card">
+                    <h3>Network CB</h3>
+                    <div id="network-cb-state" class="stat-value small">CLOSED</div>
+                    <p id="network-cb-info">0/3 failures</p>
                 </div>
             </section>
 

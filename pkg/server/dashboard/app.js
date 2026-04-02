@@ -52,13 +52,39 @@ socket$.pipe(
             dlqCount.style.color = '';
         }
 
-        const now = new Date();
-        lastUpdate.textContent = now.toLocaleTimeString();
+        // Update CB Statuses
+        updateCBStatus('storage', data.storage_cb);
+        updateCBStatus('network', data.network_cb);
         
         // Log update only if data changed
-        addLog('Broker', `Update received - Queue: ${data.queue_size}, DLQ: ${data.dlq_size}`, 'pop');
+        addLog('Broker', `Update received - Q: ${data.queue_size}, DLQ: ${data.dlq_size}, Storage: ${data.storage_cb.state}, Net: ${data.network_cb.state}`, 'pop');
     })
 ).subscribe();
+
+function updateCBStatus(prefix, cb) {
+    const stateEl = document.getElementById(`${prefix}-cb-state`);
+    const infoEl = document.getElementById(`${prefix}-cb-info`);
+    const cardEl = document.getElementById(`${prefix}-cb-card`);
+
+    if (!stateEl || !cb) return;
+
+    stateEl.textContent = cb.state.toUpperCase();
+    infoEl.textContent = `${cb.failures}/${cb.threshold} failures`;
+
+    // Visual feedback for Open/Half-Open
+    cardEl.style.borderColor = 'rgba(255, 255, 255, 0.05)';
+    stateEl.style.color = 'var(--accent-color)';
+
+    if (cb.state === 'Open') {
+        stateEl.style.color = 'var(--error)';
+        cardEl.style.borderColor = 'var(--error)';
+    } else if (cb.state === 'Half-Open') {
+        stateEl.style.color = 'var(--warning)';
+        cardEl.style.borderColor = 'var(--warning)';
+    } else if (cb.state === 'Closed') {
+        stateEl.style.color = 'var(--success)';
+    }
+}
 
 function addLog(source, message, type) {
     const entry = document.createElement('div');

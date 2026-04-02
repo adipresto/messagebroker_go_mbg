@@ -49,23 +49,30 @@ func (s *HTTPServer) broadcastStats() {
 	defer s.mu.Unlock()
 
 	queueSize, dlqSize := s.broker.GetStats()
-	cbState := s.broker.GetCBState()
-	cbFailures, cbThreshold := s.broker.GetCBMetrics()
+	storageState := s.broker.GetCBState()
+	storageFailures, storageThreshold := s.broker.GetCBMetrics()
 
-	// If dispatcher has its own overrides or state to report, we could check here,
-	// but since they share the same CB instance, broker is sufficient.
+	networkState := "N/A"
+	networkFailures, networkThreshold := 0, 0
 	if s.dispatcher != nil {
-		cbState = s.dispatcher.GetCBState()
-		cbFailures, cbThreshold = s.dispatcher.GetCBMetrics()
+		networkState = s.dispatcher.GetCBState()
+		networkFailures, networkThreshold = s.dispatcher.GetCBMetrics()
 	}
 
 	stats := map[string]interface{}{
-		"queue_size":   queueSize,
-		"dlq_size":     dlqSize,
-		"cb_state":     cbState,
-		"cb_failures":  cbFailures,
-		"cb_threshold": cbThreshold,
-		"timestamp":    time.Now().Unix(),
+		"queue_size": queueSize,
+		"dlq_size":   dlqSize,
+		"storage_cb": map[string]interface{}{
+			"state":     storageState,
+			"failures":  storageFailures,
+			"threshold": storageThreshold,
+		},
+		"network_cb": map[string]interface{}{
+			"state":     networkState,
+			"failures":  networkFailures,
+			"threshold": networkThreshold,
+		},
+		"timestamp": time.Now().Unix(),
 	}
 
 	data, _ := json.Marshal(stats)
@@ -137,19 +144,29 @@ func (s *HTTPServer) handleAll(w http.ResponseWriter, r *http.Request) {
 
 func (s *HTTPServer) handleStats(w http.ResponseWriter, r *http.Request) {
 	queueSize, dlqSize := s.broker.GetStats()
-	cbState := s.broker.GetCBState()
-	cbFailures, cbThreshold := s.broker.GetCBMetrics()
+	storageState := s.broker.GetCBState()
+	storageFailures, storageThreshold := s.broker.GetCBMetrics()
 
+	networkState := "N/A"
+	networkFailures, networkThreshold := 0, 0
 	if s.dispatcher != nil {
-		cbState = s.dispatcher.GetCBState()
-		cbFailures, cbThreshold = s.dispatcher.GetCBMetrics()
+		networkState = s.dispatcher.GetCBState()
+		networkFailures, networkThreshold = s.dispatcher.GetCBMetrics()
 	}
+
 	stats := map[string]interface{}{
-		"queue_size":   queueSize,
-		"dlq_size":     dlqSize,
-		"cb_state":     cbState,
-		"cb_failures":  cbFailures,
-		"cb_threshold": cbThreshold,
+		"queue_size": queueSize,
+		"dlq_size":   dlqSize,
+		"storage_cb": map[string]interface{}{
+			"state":     storageState,
+			"failures":  storageFailures,
+			"threshold": storageThreshold,
+		},
+		"network_cb": map[string]interface{}{
+			"state":     networkState,
+			"failures":  networkFailures,
+			"threshold": networkThreshold,
+		},
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(stats)

@@ -11,6 +11,8 @@ import (
 	"mbg/pkg/server"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 
 	"google.golang.org/grpc"
@@ -27,15 +29,30 @@ func main() {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	// 2. Setup Core Component
-	cb := circuitbreaker.NewCircuitBreaker(
+	// 2. Setup Core Component (Isolated Circuit Breakers with Telemetry)
+	os.MkdirAll("data/cb_log", 0755)
+	cwd, _ := os.Getwd()
+	cbLogPath := filepath.Join(cwd, "data", "cb_log", "cb_telemetry.log")
+
+	log.Printf("Circuit Breaker Telemetry Log: %s", cbLogPath)
+
+	storageCB := circuitbreaker.NewCircuitBreaker(
+		"Storage",
 		cfg.CircuitBreaker.Threshold,
 		time.Duration(cfg.CircuitBreaker.TimeoutSeconds)*time.Second,
+		cbLogPath,
 	)
-	b := broker.NewBroker[string](cfg.Broker.StoragePath, cfg.Broker.DeadLetterPath, cb)
+	networkCB := circuitbreaker.NewCircuitBreaker(
+		"Network",
+		cfg.CircuitBreaker.Threshold,
+		time.Duration(cfg.CircuitBreaker.TimeoutSeconds)*time.Second,
+		cbLogPath,
+	)
+
+	b := broker.NewBroker[string](cfg.Broker.StoragePath, cfg.Broker.DeadLetterPath, storageCB)
 
 	// 3. Setup Dispatcher (Active Delivery)
-	disp := broker.NewDispatcher(b, cfg, cb)
+	disp := broker.NewDispatcher(b, cfg, networkCB)
 	if !*noDispatcher {
 		go disp.Start()
 	} else {

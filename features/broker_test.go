@@ -113,6 +113,10 @@ func (c *testContext) reset() {
 	// Ensure clean state on disk after process is dead
 	c.purgeStorage()
 
+	// Truncate CB telemetry log
+	cbLog, _ := filepath.Abs("../data/cb_log/cb_telemetry.log")
+	os.WriteFile(cbLog, []byte(""), 0644)
+
 	// Drain the queue to ensure clean state (if anyone is still listening)
 	if c.httpBaseURL != "" {
 		c.drainQueue()
@@ -350,44 +354,48 @@ func (c *testContext) theCircuitBreakerThresholdIsSetTo(threshold int) error {
 }
 
 func (c *testContext) theCircuitBreakerShouldTransitionToState(expected string) error {
-	url := fmt.Sprintf("%s/api/stats", c.httpBaseURL)
-	timeout := time.After(8 * time.Second) // Sedikit lebih lama dari CB timeout standar (5s)
-	ticker := time.NewTicker(300 * time.Millisecond)
+	logPath, _ := filepath.Abs("../pkg/circuitbreaker/data/cb_telemetry.log")
+	timeout := time.After(8 * time.Second)
+	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
+
+	fmt.Printf(" [LogWatch] Waiting for state: %s in %s\n", expected, logPath)
 
 	for {
 		select {
 		case <-timeout:
-			return fmt.Errorf("timeout waiting for circuit breaker state %s (last was %s)", expected, c.lastCBState)
+			return fmt.Errorf("timeout waiting for %s in log (last was %s)", expected, c.lastCBState)
 		case <-ticker.C:
-			resp, err := http.Get(url)
+			content, err := os.ReadFile(logPath)
 			if err != nil {
 				continue
 			}
-			var stats map[string]interface{}
-			if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
-				resp.Body.Close()
-				continue
-			}
-			resp.Body.Close()
 
-			if val, ok := stats["cb_state"]; ok && val != nil {
-				actual := val.(string)
-				failures := int(stats["cb_failures"].(float64))
-				threshold := int(stats["cb_threshold"].(float64))
+			lines := strings.Split(string(content), "\n")
+			// Look backwards for the most recent event for 'Storage'
+			for i := len(lines) - 1; i >= 0; i-- {
+				line := lines[i]
+				if strings.Contains(line, "| Storage |") {
+					// Format: [CB_EVENT] <timestamp> | <name> | <old> -> <new> | failures: <count>
+					parts := strings.Split(line, " -> ")
+					if len(parts) >= 2 {
+						remaining := parts[1]
+						stateParts := strings.Split(remaining, " | ")
+						if len(stateParts) > 0 {
+							actual := stateParts[0]
+							c.lastCBState = actual
 
-				c.lastCBState = fmt.Sprintf("%s (%d/%d failures)", actual, failures, threshold)
-
-				if actual == expected {
-					return nil
+							if actual == expected {
+								fmt.Printf(" [LogWatch] Found state: %s\n", actual)
+								return nil
+							}
+						}
+					}
 				}
-
-				// Lenience for Half-Open: If we missed it and it's already Closed, it means it worked.
-				if expected == "Half-Open" && actual == "Closed" {
-					fmt.Println(" [Test] Missed Half-Open but saw Closed, assuming success.")
-					return nil
-				}
 			}
+
+			// Special case: if we want Closed and log is empty (meaning it stayed Closed), that's fine too?
+			// No, better to ensure we log the initial state or a reset.
 		}
 	}
 }
@@ -505,7 +513,15 @@ func (c *testContext) theCircuitBreakerIs(state string) error {
 	if state == "Closed" {
 		return c.theCircuitBreakerIsClosed()
 	}
-	// For other states like "Open", we'd need to force failure, but usually tests start with Closed
+	if state == "Open" {
+		// To force OPEN state, we trigger storage failures until threshold is met
+		// threshold is usually 3 in default config
+		if err := c.consecutivePushAttemptsFailDueToStorageErrors(3); err != nil {
+			return err
+		}
+		// Confirm it's Open
+		return c.theCircuitBreakerShouldTransitionToState("Open")
+	}
 	return nil
 }
 

@@ -1,15 +1,22 @@
+2026/04/02 06:55:13 Circuit Breaker Telemetry Log: C:\Users\KAINE\Documents\Development\message_broker_sendiri\data\cb_log\cb_telemetry.log
+ [CB Debug] Created Storage with logPath: C:\Users\KAINE\Documents\Development\message_broker_sendiri\data\cb_log\cb_telemetry.log
+ [CB Debug] Created Network with logPath: C:\Users\KAINE\Documents\Development\message_broker_sendiri\data\cb_log\cb_telemetry.log
 Recovering messages from: ./data/messages (Absolute: C:\Users\KAINE\Documents\Development\message_broker_sendiri\data\messages)
 Successfully recovered 0 messages
 Dispatcher started with RabbitMQ-style Competing Consumers...
  [Worker 0] ready
- [Worker 1] ready
- [Worker 3] ready
  [Worker 4] ready
+ [Worker 3] ready
+ [Worker 1] ready
  [Worker 2] ready
-2026/04/01 18:50:18 Starting HTTP & Dashboard server on http://localhost:8081
-2026/04/01 18:50:18 Starting gRPC server on port 50051
+2026/04/02 06:55:13 Starting HTTP & Dashboard server on http://localhost:8081
+2026/04/02 06:55:13 Starting gRPC server on port 50051
+ [CB Debug] Logging event for Storage: 0 -> 0 to C:\Users\KAINE\Documents\Development\message_broker_sendiri\data\cb_log\cb_telemetry.log
  [CB] Config Reset: Threshold=3, Timeout=5s
+ [CB Debug] Logging event for Network: 0 -> 0 to C:\Users\KAINE\Documents\Development\message_broker_sendiri\data\cb_log\cb_telemetry.log
  [CB] Config Reset: Threshold=3, Timeout=5s
+ [CB Debug] Logging event for Storage: 0 -> 0 to C:\Users\KAINE\Documents\Development\message_broker_sendiri\data\cb_log\cb_telemetry.log
  [CB] Config Reset: Threshold=3, Timeout=5s
+ [CB Debug] Logging event for Network: 0 -> 0 to C:\Users\KAINE\Documents\Development\message_broker_sendiri\data\cb_log\cb_telemetry.log
  [CB] Config Reset: Threshold=3, Timeout=5s
  [Success] Message SELECT-001 delivered to auth-service (http://localhost:9590/webhook)

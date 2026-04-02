@@ -16,7 +16,7 @@
 						"header": [],
 						"body": {
 							"mode": "raw",
-							"raw": "{\n    \"id\": \"TX-{{$randomInt}}\",\n    \"payload\": \"Hello from Postman\"\n}",
+							"raw": "{\n    \"id\": \"TX-{{$randomInt}}\",\n    \"payload\": \"Hello from Postman\",\n    \"target\": \"sample_service\"\n}",
 							"options": {
 								"raw": {
 									"language": "json"
@@ -62,7 +62,7 @@
 						"header": [],
 						"body": {
 							"mode": "raw",
-							"raw": "{\n    \"id\": \"JSON-{{$randomInt}}\",\n    \"payload\": {\n        \"event\": \"user_signup\",\n        \"data\": {\n            \"user_id\": 42,\n            \"role\": \"admin\",\n            \"timestamp\": \"{{$isoTimestamp}}\"\n        }\n    }\n}",
+							"raw": "{\n    \"id\": \"JSON-{{$randomInt}}\",\n    \"payload\": {\n        \"event\": \"user_signup\",\n        \"data\": {\n            \"user_id\": 42,\n            \"role\": \"admin\",\n            \"timestamp\": \"{{$isoTimestamp}}\"\n        }\n    },\n    \"target\": \"email_service\"\n}",
 							"options": {
 								"raw": {
 									"language": "json"
@@ -215,6 +215,21 @@
 						"description": "Check if the broker server is running."
 					},
 					"response": []
+				},
+				{
+					"name": "WebSocket Monitor",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{wsUrl}}",
+							"host": [
+								"{{wsUrl}}"
+							]
+						},
+						"description": "Postman WebSocket request to monitor real-time stats (Queue and CB state)."
+					},
+					"response": []
 				}
 			]
 		},
@@ -228,7 +243,7 @@
 						"header": [],
 						"body": {
 							"mode": "raw",
-							"raw": "{\n    \"target\": \"http://localhost:9090/webhook\"\n}",
+							"raw": "{\n    \"name\": \"local_service\",\n    \"url\": \"http://localhost:9090/webhook\"\n}",
 							"options": {
 								"raw": {
 									"language": "json"
@@ -245,7 +260,139 @@
 								"targets"
 							]
 						},
-						"description": "Register an external HTTP/gRPC endpoint for automatic message delivery."
+						"description": "Register an external HTTP target for automatic message delivery."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "System & Testing",
+			"item": [
+				{
+					"name": "Reset System",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/reset",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"reset"
+							]
+						},
+						"description": "Clear all messages and reset Circuit Breaker stats."
+					},
+					"response": []
+				},
+				{
+					"name": "Set Storage Path",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"path\": \"./data/test_queue\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/test/storage-path",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"test",
+								"storage-path"
+							]
+						},
+						"description": "Dynamically change the storage directory for the broker."
+					},
+					"response": []
+				},
+				{
+					"name": "Update Config",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"threshold\": 5,\n    \"timeout_seconds\": 30\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/test/config",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"test",
+								"config"
+							]
+						},
+						"description": "Update Circuit Breaker thresholds and timeouts on the fly."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "gRPC Service",
+			"item": [
+				{
+					"name": "gRPC Push",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"id\": \"GRPC-{{$randomInt}}\",\n    \"payload\": \"Sent via gRPC\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{grpcUrl}}/broker.BrokerService/Push",
+							"host": [
+								"{{grpcUrl}}"
+							],
+							"path": [
+								"broker.BrokerService",
+								"Push"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "gRPC Pop",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{grpcUrl}}/broker.BrokerService/Pop",
+							"host": [
+								"{{grpcUrl}}"
+							],
+							"path": [
+								"broker.BrokerService",
+								"Pop"
+							]
+						}
 					},
 					"response": []
 				}
