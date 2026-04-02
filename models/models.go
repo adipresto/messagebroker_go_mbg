@@ -3,6 +3,7 @@ package models
 type Message[T any] struct {
 	ID         string `json:"id" validate:"required"`
 	Payload    T      `json:"payload"`
+	Headers    any    `json:"headers,omitempty"`
 	Target     string `json:"target"`
 	CreatedAt  int64  `json:"created_at"`
 	RetryCount int    `json:"retry_count"`

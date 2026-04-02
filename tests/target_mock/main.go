@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 )
 
 // MockTargetServer mengimplementasikan TargetServiceServer (gRPC) dan HTTP Handler
@@ -24,6 +25,16 @@ type MockTargetServer struct {
 func (s *MockTargetServer) Deliver(ctx context.Context, req *proto.DeliveryRequest) (*proto.DeliveryResponse, error) {
 	log.Printf("[gRPC] Received message ID: %s, Payload: %s", req.Id, req.Payload)
 
+	// Capturing Metadata
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		log.Printf("[gRPC Metadata] %v", md)
+	}
+
+	// Capturing payload field 'Headers'
+	if req.Headers != "" {
+		log.Printf("[gRPC Payload Headers] %s", req.Headers)
+	}
+
 	// Simulasi pemrosesan dan modifikasi payload balik sesuai permintaan user
 	return &proto.DeliveryResponse{
 		Id:          req.Id,
@@ -35,13 +46,16 @@ func (s *MockTargetServer) Deliver(ctx context.Context, req *proto.DeliveryReque
 
 // HTTP Handlers
 func (s *MockTargetServer) handleWebhook(w http.ResponseWriter, r *http.Request) {
+	// Log HTTP Headers
+	log.Printf("[HTTP Headers] %v", r.Header)
+
 	var body map[string]interface{}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	log.Printf("[HTTP Webhook] Received: %v", body)
+	log.Printf("[HTTP Webhook Body] Received: %v", body)
 
 	// Kembalikan payload dengan penambahan metadata
 	body["processed_at"] = time.Now().Unix()

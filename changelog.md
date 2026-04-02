@@ -2,6 +2,15 @@
 
 Semua perubahan signifikan pada proyek **Message Broker Sendiri (MBS) akan dicatat di file ini. Log ini mengikuti format [Keep a Changelog](https://keepachangelog.com/id/1.1.0/).
 
+## [0.7.0] - 2026-04-02
+
+### Added
+- **Dukungan Custom Headers (Otorisasi)**: Kemampuan untuk menyertakan `headers` pada payload pesan untuk diteruskan ke sistem target.
+- **Konfigurasi Default Headers per Target**: Penambahan field `headers` pada konfigurasi target yang secara otomatis menyertakan header tertentu (misal: `Authorization`) pada setiap pengiriman.
+- **Logika Merging & Override Header**: Mekanisme penggabungan header di mana header spesifik pada pesan akan menimpa (*override*) header default dari konfigurasi target.
+- **Propagasi Header Multi-Protokol**: Pemetaan header pesan ke HTTP Headers (untuk target HTTP) dan gRPC Metadata (untuk target gRPC).
+- **Penguatan Infrastruktur Pengujian (Mock Server)**: Update *mock server* internal dan *standalone* untuk menangkap, mencatat, dan memverifikasi header/metadata yang diterima.
+
 ## [0.6.0] - 2026-04-02
 
 ### Added

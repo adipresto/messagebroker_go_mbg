@@ -28,8 +28,9 @@ type Config struct {
 }
 
 type TargetConfig struct {
-	Name string `yaml:"name"`
-	URL  string `yaml:"url"`
+	Name    string            `yaml:"name"`
+	URL     string            `yaml:"url"`
+	Headers map[string]string `yaml:"headers,omitempty"`
 }
 
 func LoadConfig(path string) (*Config, error) {

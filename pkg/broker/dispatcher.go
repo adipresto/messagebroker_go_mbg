@@ -17,6 +17,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 )
 
 type Dispatcher[T any] struct {
@@ -152,20 +153,66 @@ func (d *Dispatcher[T]) processMessage(msg models.Message[T]) {
 
 func (d *Dispatcher[T]) sendToTarget(target config.TargetConfig, msg models.Message[T]) error {
 	if strings.HasPrefix(target.URL, "grpc://") {
-		return d.sendToGRPCTarget(strings.TrimPrefix(target.URL, "grpc://"), msg)
+		return d.sendToGRPCTarget(target, msg)
 	}
 
 	// Default to HTTP
-	return d.sendToHTTPTarget(target.URL, msg)
+	return d.sendToHTTPTarget(target, msg)
 }
 
-func (d *Dispatcher[T]) sendToHTTPTarget(target string, msg models.Message[T]) error {
+func (d *Dispatcher[T]) getMergedHeaders(target config.TargetConfig, msg models.Message[T]) map[string]string {
+	merged := make(map[string]string)
+
+	// 1. Load target-level default headers
+	for k, v := range target.Headers {
+		merged[k] = v
+	}
+
+	// 2. Load message-level headers (if any)
+	if msg.Headers != nil {
+		// Attempt to parse msg.Headers as map[string]interface{} or map[string]string
+		switch h := msg.Headers.(type) {
+		case map[string]string:
+			for k, v := range h {
+				merged[k] = v
+			}
+		case map[string]interface{}:
+			for k, v := range h {
+				merged[k] = fmt.Sprintf("%v", v)
+			}
+		case string:
+			// If it's a string, maybe it's JSON?
+			var jsonMap map[string]interface{}
+			if err := json.Unmarshal([]byte(h), &jsonMap); err == nil {
+				for k, v := range jsonMap {
+					merged[k] = fmt.Sprintf("%v", v)
+				}
+			}
+		}
+	}
+
+	return merged
+}
+
+func (d *Dispatcher[T]) sendToHTTPTarget(target config.TargetConfig, msg models.Message[T]) error {
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return err
 	}
 
-	resp, err := d.client.Post(target, "application/json", bytes.NewBuffer(data))
+	req, err := http.NewRequest("POST", target.URL, bytes.NewBuffer(data))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	// Apply merged headers
+	headers := d.getMergedHeaders(target, msg)
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+
+	resp, err := d.client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -178,7 +225,8 @@ func (d *Dispatcher[T]) sendToHTTPTarget(target string, msg models.Message[T]) e
 	return nil
 }
 
-func (d *Dispatcher[T]) sendToGRPCTarget(addr string, msg models.Message[T]) error {
+func (d *Dispatcher[T]) sendToGRPCTarget(target config.TargetConfig, msg models.Message[T]) error {
+	addr := strings.TrimPrefix(target.URL, "grpc://")
 	conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return fmt.Errorf("failed to dial grpc target: %w", err)
@@ -197,13 +245,21 @@ func (d *Dispatcher[T]) sendToGRPCTarget(addr string, msg models.Message[T]) err
 		payloadStr = string(data)
 	}
 
+	// Prepare headers for both field and metadata
+	headers := d.getMergedHeaders(target, msg)
+	headersData, _ := json.Marshal(headers)
+
 	req := &proto.DeliveryRequest{
 		Id:              msg.ID,
 		Payload:         payloadStr,
 		OriginTimestamp: msg.CreatedAt,
+		Headers:         string(headersData),
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// Create context with metadata
+	md := metadata.New(headers)
+	ctx := metadata.NewOutgoingContext(context.Background(), md)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
 	resp, err := client.Deliver(ctx, req)

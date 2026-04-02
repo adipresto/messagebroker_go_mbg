@@ -1,0 +1,3 @@
+[CB_EVENT] 2026-04-02 15:48:03.176 | Network | Closed -> Open | failures: 3
+[CB_EVENT] 2026-04-02 15:48:11.011 | Network | Open -> Half-Open | failures: 0
+[CB_EVENT] 2026-04-02 15:48:11.176 | Network | Half-Open -> Open | failures: 1

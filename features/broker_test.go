@@ -21,6 +21,7 @@ import (
 	"github.com/cucumber/godog"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 )
 
 type testContext struct {
@@ -45,6 +46,7 @@ type testContext struct {
 	mockServerGRPC *grpc.Server
 	lastTarget     string
 	pushedMsgs     map[string][]models.Message[any] // URL -> Messages
+	pushedHeaders  map[string][]map[string]string   // URL -> Headers (index matches pushedMsgs)
 	activeMsgID    string                              // Track the most recently pushed message ID for context
 	lastCBState    string                              // Track last state for clear error messages
 }
@@ -61,6 +63,29 @@ func (s *mockTargetTestServer) Deliver(ctx context.Context, req *proto.DeliveryR
 		Payload: req.Payload,
 	}
 	s.tc.pushedMsgs[addr] = append(s.tc.pushedMsgs[addr], msg)
+
+	// Capture headers (from metadata and field)
+	headers := make(map[string]string)
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		for k, v := range md {
+			if len(v) > 0 {
+				headers[k] = v[0]
+			}
+		}
+	}
+
+	// Also parse field if it's there
+	if req.Headers != "" {
+		var fieldHeaders map[string]string
+		if err := json.Unmarshal([]byte(req.Headers), &fieldHeaders); err == nil {
+			for k, v := range fieldHeaders {
+				headers[k] = v
+			}
+		}
+	}
+
+	s.tc.pushedHeaders[addr] = append(s.tc.pushedHeaders[addr], headers)
+
 	return &proto.DeliveryResponse{Status: "SUCCESS"}, nil
 }
 
@@ -95,6 +120,7 @@ func (c *testContext) reset() {
 		c.mockServerGRPC = nil
 	}
 	c.pushedMsgs = make(map[string][]models.Message[any])
+	c.pushedHeaders = make(map[string][]map[string]string)
 	c.lastTarget = ""
 	if c.grpcConn != nil {
 		c.grpcConn.Close()
@@ -757,6 +783,14 @@ func (c *testContext) aMockServerIsListeningAt(addr string) error {
 		var msg models.Message[any]
 		json.NewDecoder(r.Body).Decode(&msg)
 		c.pushedMsgs[addr] = append(c.pushedMsgs[addr], msg)
+
+		// Capture headers
+		headers := make(map[string]string)
+		for k := range r.Header {
+			headers[k] = r.Header.Get(k)
+		}
+		c.pushedHeaders[addr] = append(c.pushedHeaders[addr], headers)
+
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -987,6 +1021,84 @@ func (c *testContext) itsNextRetryShouldBeSetAccordingToExponentialBackoff() err
 	}
 }
 
+func (c *testContext) theBrokerHasTheFollowingRegisteredTargetsWithHeaders(dt *godog.Table) error {
+	for i, row := range dt.Rows {
+		if i == 0 {
+			continue // Skip header
+		}
+		name := row.Cells[0].Value
+		targetUrl := row.Cells[1].Value
+		headerName := row.Cells[2].Value
+		headerValue := row.Cells[3].Value
+
+		url := fmt.Sprintf("%s/api/targets", c.httpBaseURL)
+		body := map[string]interface{}{
+			"name": name,
+			"url":  targetUrl,
+			"headers": map[string]string{
+				headerName: headerValue,
+			},
+		}
+		data, _ := json.Marshal(body)
+		resp, err := http.Post(url, "application/json", bytes.NewBuffer(data))
+		if err != nil {
+			return err
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusCreated {
+			return fmt.Errorf("failed to register target %s: %d", name, resp.StatusCode)
+		}
+	}
+	return nil
+}
+
+func (c *testContext) aProducerPushesAMessageWithPayloadAndDataTo(id, data, target string) error {
+	msg := models.Message[any]{ID: id, Payload: data, Target: target}
+	c.activeMsgID = id
+	payloadData, _ := json.Marshal(msg)
+	url := fmt.Sprintf("%s/api/messages", c.httpBaseURL)
+	resp, err := http.Post(url, "application/json", bytes.NewBuffer(payloadData))
+	if err != nil {
+		return err
+	}
+	c.lastResp = resp
+	return nil
+}
+
+func (c *testContext) theMockServerAtShouldReceiveMessageWithHeaders(addr, id string, dt *godog.Table) error {
+	timeout := time.After(7 * time.Second)
+	tick := time.NewTicker(500 * time.Millisecond)
+	defer tick.Stop()
+
+	for {
+		select {
+		case <-timeout:
+			return fmt.Errorf("mock server %s never received message %s", addr, id)
+		case <-tick.C:
+			msgs := c.pushedMsgs[addr]
+			headersList := c.pushedHeaders[addr]
+			for i, m := range msgs {
+				if m.ID == id {
+					// Verify headers
+					receivedHeaders := headersList[i]
+					for j, row := range dt.Rows {
+						if j == 0 {
+							continue
+						}
+						expectedName := http.CanonicalHeaderKey(row.Cells[0].Value)
+						expectedValue := row.Cells[1].Value
+						actualValue := receivedHeaders[expectedName]
+						if actualValue != expectedValue {
+							return fmt.Errorf("expected header %s=%s, got %s", expectedName, expectedValue, actualValue)
+						}
+					}
+					return nil
+				}
+			}
+		}
+	}
+}
+
 func InitializeScenario(sc *godog.ScenarioContext) {
 	tc := &testContext{}
 
@@ -1051,6 +1163,9 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 	sc.Step(`^the message "([^"]*)" should be removed from the main queue$`, tc.theMessageShouldBeRemovedFromTheMainQueue)
 	sc.Step(`^the dashboard stats should show dlq size as (\d+)$`, tc.theDashboardStatsShouldShowDlqSizeAs)
 	sc.Step(`^a mock server at "([^"]*)" always returns 500 error$`, tc.aMockServerAtAlwaysReturnsError)
+	sc.Step(`^the broker has the following registered targets with headers:$`, tc.theBrokerHasTheFollowingRegisteredTargetsWithHeaders)
+	sc.Step(`^a producer pushes a message with payload "([^"]*)" and data "([^"]*)" to "([^"]*)"$`, tc.aProducerPushesAMessageWithPayloadAndDataTo)
+	sc.Step(`^the mock server at "([^"]*)" should receive message "([^"]*)" with headers:$`, tc.theMockServerAtShouldReceiveMessageWithHeaders)
 
 	sc.Before(func(ctx context.Context, sc *godog.Scenario) (context.Context, error) {
 		tc.reset()

@@ -27,9 +27,9 @@ graph TD
             Broker -- "Triggers Delivery" --> Dispatcher[Dispatcher System]
         end
         
-        subgraph "External Delivery (v0.5.0)"
-            Dispatcher -- "Wrapped in CB" --> TargetHTTP[External HTTP Target]
-            Dispatcher -- "Wrapped in CB" --> TargetGRPC[External gRPC Target]
+        subgraph "External Delivery (v0.7.0)"
+            Dispatcher -- "Header Merging & Mapping" --> TargetHTTP[External HTTP Target]
+            Dispatcher -- "Metadata & Header Mapping" --> TargetGRPC[External gRPC Target]
             Dispatcher -- "Exponential Backoff Update" --> Broker
         end
 
@@ -52,9 +52,11 @@ Implementasi inti `Broker[T any]` kini menggunakan tipe data `any` yang memungki
 ### 3. Kemampuan Observabilitas (Observability)
 Dasbor waktu nyata bukan hanya sekadar visualisasi, tetapi juga berfungsi sebagai titik verifikasi kesehatan sistem (*health check*) yang memantau metrik antrean secara kontinu melalui WebSockets.
 
-### 4. Automated Dispatch & Exponential Backoff
+### 4. Automated Dispatch, Exponential Backoff & Header Support
 Sistem pengiriman sekarang secara otomatis memonitor seluruh pesan antrean yang siap untuk diteruskan (*ready to be dispatched*) menggunakan `Dispatcher` yang berjalan secara asynchronous:
 - Secara adaptif mengubah jarak waktu pengiriman ulang (*NextRetry*) berdasarkan kelipatan *Exponential Backoff* saat percobaan pertama gagal.
+- **Header Propagation**: Pengiriman pesan kini mendukung pengiriman metadata tambahan (seperti token otorisasi) melalui HTTP Headers dan gRPC Metadata.
+- **Header Merging Strategy**: Sistem menggabungkan *default headers* dari konfigurasi target dengan *dynamic headers* dari payload pesan, di mana header dari pesan memiliki prioritas tertinggi.
 - Integrasi mulus yang melindungi target maupun layanan melalui limitasi yang aman via *Circuit Breaker*.
 
 ## Mekanisme Keamanan & Ketahanan (Lanjutan)

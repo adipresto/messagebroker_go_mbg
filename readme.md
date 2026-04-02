@@ -10,7 +10,8 @@ Message Broker yang tangguh dan modern berbasis Go, dirancang untuk keandalan da
     - **REST API**: Integrasi mudah dengan aplikasi web dan klien HTTP.
     - **WebSocket**: *Streaming* data statistik waktu nyata.
 - **Dukungan Payload JSON Dinamis**: Pengiriman data kompleks melalui format JSON yang ditenagai oleh tipe data generik Go (`any`). Sistem ini kini mampu menangani objek JSON bersarang secara orisinal (native) tanpa perlu konversi manual.
-- **Pengiriman Otomatis (Dispatcher)**: Kemampuan mengirim payload secara otomatis ke *endpoint* eksternal target melalui HTTP maupun gRPC.
+- **Pengiriman Otomatis (Dispatcher) & Headers**: Kemampuan mengirim payload secara otomatis ke *endpoint* eksternal target melalui HTTP maupun gRPC dengan dukungan *Custom Headers* (untuk Otorisasi).
+- **Logika Header Merging**: Mendukung pengaturan header *default* per target yang dapat ditimpa (*override*) oleh header spesifik dari masing-masing pesan.
 - **Strategi Exponential Backoff**: Proses percobaan ulang (retry) yang tangguh dan adaptif pada pengiriman target yang mengalami kendala.
 - **Persistensi Data (Outbox Pattern)**: Pesan disimpan ke penyimpanan fisik sebelum masuk ke memori untuk menjamin durabilitas.
 - **Circuit Breaker Robust**: Melindungi sistem pengiriman/penerimaan dengan status *Closed, Open, dan Half-Open* (Mekanisme *self-healing*).
@@ -47,9 +48,10 @@ Message Broker yang tangguh dan modern berbasis Go, dirancang untuk keandalan da
 ## API Endpoints
 
 ### REST API
-- `POST /api/messages`: Menambahkan pesan ke antrean.
+- `POST /api/messages`: Menambahkan pesan ke antrean. Mendukung field opsional `headers` (object) untuk metadata atau otorisasi.
 - `GET /api/messages`: Mengambil (Pop) pesan tertua.
 - `GET /api/stats`: Melihat statistik ukuran antrean saat ini.
+- `POST /api/targets`: Mendaftarkan target baru. Mendukung field opsional `headers` (map string to string) untuk default headers.
 
 ### WebSocket
 - `/ws`: Untuk menerima pembaharuan statistik secara *real-time*.

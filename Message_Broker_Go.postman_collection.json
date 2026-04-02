@@ -135,6 +135,34 @@
 					"response": []
 				},
 				{
+					"name": "Push Message with Headers",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"id\": \"HDR-{{$randomInt}}\",\n    \"target\": \"auth-service\",\n    \"payload\": {\n        \"action\": \"process_data\",\n        \"value\": 123\n    },\n    \"headers\": {\n        \"X-Custom-Auth\": \"SecretToken-999\",\n        \"X-Trace-ID\": \"{{$guid}}\"\n    }\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/messages",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"messages"
+							]
+						},
+						"description": "Push a message with custom headers. These headers will be sent to the target system (HTTP Headers or gRPC Metadata)."
+					},
+					"response": []
+				},
+				{
 					"name": "Get All Messages",
 					"request": {
 						"method": "GET",
@@ -261,6 +289,34 @@
 							]
 						},
 						"description": "Register an external HTTP target for automatic message delivery."
+					},
+					"response": []
+				},
+				{
+					"name": "Register Webhook Target with Headers",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"name\": \"auth-target\",\n    \"url\": \"{{webhook_mock_url}}\",\n    \"headers\": {\n        \"Authorization\": \"Bearer InitialToken000\",\n        \"X-Service-Source\": \"Broker-Core\"\n    }\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/targets",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"targets"
+							]
+						},
+						"description": "Register an external HTTP target with default headers. These headers will be automatically added to all messages delivered to this target (unless overridden by the message)."
 					},
 					"response": []
 				}

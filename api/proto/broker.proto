@@ -12,6 +12,7 @@ service BrokerService {
 message PushRequest {
   string id = 1;
   string payload = 2;
+  string headers = 3;
 }
 
 message PushResponse {

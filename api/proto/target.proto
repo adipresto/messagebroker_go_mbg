@@ -14,6 +14,7 @@ message DeliveryRequest {
   string id = 1;
   string payload = 2;
   int64 origin_timestamp = 3;
+  string headers = 4;
 }
 
 message DeliveryResponse {
