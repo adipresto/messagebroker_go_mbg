@@ -60,3 +60,22 @@ Feature: Payload Headers and Authorization
     Then the mock server at "http://localhost:9597/webhook" should receive message "MSG-OVERRIDE-001" with headers:
       | header-name   | header-value |
       | Authorization | Bearer NEW   |
+  Scenario: Target receives only the payload in the request body
+    Given a mock server is listening at "http://localhost:9598/webhook"
+    And the broker has the following registered targets:
+      | name         | url                             |
+      | clean-target | http://localhost:9598/webhook   |
+    When the producer sends the following JSON payload via POST "/api/messages":
+      """
+      {
+        "id": "MSG-CLEAN-001",
+        "target": "clean-target",
+        "payload": {"info": "this is the only thing in body"},
+        "headers": {"X-Test": "Value"}
+      }
+      """
+    Then the mock server at "http://localhost:9598/webhook" should receive message "MSG-CLEAN-001" with headers:
+      | header-name   | header-value |
+      | X-Message-ID  | MSG-CLEAN-001|
+      | X-Test        | Value        |
+    And the mock server at "http://localhost:9598/webhook" should receive only the payload of message "MSG-CLEAN-001"

@@ -47,6 +47,7 @@ type testContext struct {
 	lastTarget     string
 	pushedMsgs     map[string][]models.Message[any] // URL -> Messages
 	pushedHeaders  map[string][]map[string]string   // URL -> Headers (index matches pushedMsgs)
+	pushedBodies   map[string][][]byte              // URL -> Bodies (index matches pushedMsgs)
 	activeMsgID    string                              // Track the most recently pushed message ID for context
 	lastCBState    string                              // Track last state for clear error messages
 }
@@ -121,6 +122,7 @@ func (c *testContext) reset() {
 	}
 	c.pushedMsgs = make(map[string][]models.Message[any])
 	c.pushedHeaders = make(map[string][]map[string]string)
+	c.pushedBodies = make(map[string][][]byte)
 	c.lastTarget = ""
 	if c.grpcConn != nil {
 		c.grpcConn.Close()
@@ -780,9 +782,22 @@ func (c *testContext) aMockServerIsListeningAt(addr string) error {
 
 	// HTTP Implementation
 	mockSrv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var msg models.Message[any]
-		json.NewDecoder(r.Body).Decode(&msg)
+		// Reconstruct Message object for test compatibility
+		msgID := r.Header.Get("X-Message-ID")
+		
+		bodyBytes, _ := io.ReadAll(r.Body)
+		var payload any
+		// Try to unmarshal as JSON, if it fails, treat as raw string (though broker always marshals)
+		if err := json.Unmarshal(bodyBytes, &payload); err != nil {
+			payload = string(bodyBytes)
+		}
+
+		msg := models.Message[any]{
+			ID:      msgID,
+			Payload: payload,
+		}
 		c.pushedMsgs[addr] = append(c.pushedMsgs[addr], msg)
+		c.pushedBodies[addr] = append(c.pushedBodies[addr], bodyBytes)
 
 		// Capture headers
 		headers := make(map[string]string)
@@ -1099,6 +1114,33 @@ func (c *testContext) theMockServerAtShouldReceiveMessageWithHeaders(addr, id st
 	}
 }
 
+func (c *testContext) theMockServerAtShouldReceiveOnlyThePayloadOfMessage(addr, id string) error {
+	timeout := time.After(5 * time.Second)
+	tick := time.NewTicker(500 * time.Millisecond)
+	defer tick.Stop()
+
+	for {
+		select {
+		case <-timeout:
+			return fmt.Errorf("mock server %s never received message %s", addr, id)
+		case <-tick.C:
+			msgs := c.pushedMsgs[addr]
+			bodies := c.pushedBodies[addr]
+			for i, m := range msgs {
+				if m.ID == id {
+					// Check body
+					body := string(bodies[i])
+					// One more check: make sure the body does NOT contain "created_at" (metadata)
+					if strings.Contains(body, "\"created_at\"") || strings.Contains(body, "\"target\"") {
+						return fmt.Errorf("body unexpectedly contains metadata: %s", body)
+					}
+					return nil
+				}
+			}
+		}
+	}
+}
+
 func InitializeScenario(sc *godog.ScenarioContext) {
 	tc := &testContext{}
 
@@ -1166,6 +1208,7 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 	sc.Step(`^the broker has the following registered targets with headers:$`, tc.theBrokerHasTheFollowingRegisteredTargetsWithHeaders)
 	sc.Step(`^a producer pushes a message with payload "([^"]*)" and data "([^"]*)" to "([^"]*)"$`, tc.aProducerPushesAMessageWithPayloadAndDataTo)
 	sc.Step(`^the mock server at "([^"]*)" should receive message "([^"]*)" with headers:$`, tc.theMockServerAtShouldReceiveMessageWithHeaders)
+	sc.Step(`^the mock server at "([^"]*)" should receive only the payload of message "([^"]*)"$`, tc.theMockServerAtShouldReceiveOnlyThePayloadOfMessage)
 
 	sc.Before(func(ctx context.Context, sc *godog.Scenario) (context.Context, error) {
 		tc.reset()

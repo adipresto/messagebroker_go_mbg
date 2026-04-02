@@ -191,11 +191,14 @@ func (d *Dispatcher[T]) getMergedHeaders(target config.TargetConfig, msg models.
 		}
 	}
 
+	// 3. Add system headers
+	merged["X-Message-ID"] = msg.ID
+
 	return merged
 }
 
 func (d *Dispatcher[T]) sendToHTTPTarget(target config.TargetConfig, msg models.Message[T]) error {
-	data, err := json.Marshal(msg)
+	data, err := json.Marshal(msg.Payload)
 	if err != nil {
 		return err
 	}
