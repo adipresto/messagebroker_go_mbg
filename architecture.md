@@ -60,6 +60,34 @@ Sistem pengiriman sekarang secara otomatis memonitor seluruh pesan antrean yang 
 - **Header Merging Strategy**: Sistem menggabungkan *default headers* dari konfigurasi target dengan *dynamic headers* dari payload pesan, di mana header dari pesan memiliki prioritas tertinggi.
 - Integrasi mulus yang melindungi target maupun layanan melalui limitasi yang aman via *Circuit Breaker*.
 
+## Pola Asynchronous Request-Reply (X-Y-X)
+
+Mulai v0.8.0, MBG secara formal mendukung (melalui simulasi) pola Request-Reply yang memungkinkan layanan untuk berinteraksi secara asinkron tanpa kehilangan kepastian hasil.
+
+### Alur Kerja Pesan:
+
+```mermaid
+sequenceDiagram
+    participant X as Service X (Requester)
+    participant MBG as MBG (The Broker)
+    participant Y as Service Y (Worker)
+
+    X->>MBG: 1. Push Task (Target: Y, Reply: X)
+    MBG-->>X: 2. Respond "Pushed" (Async start)
+    MBG->>Y: 3. Dispatch Task to Webhook
+    Y-->>MBG: 4. Ack Delivery
+    Note over Y: Long-running process...
+    Y->>MBG: 5. Push Result (Target: X)
+    MBG->>X: 6. Dispatch Result to Callback URL
+```
+
+### Keuntungan Arsitektural:
+1.  **Decoupling**: Service X tidak perlu tahu alamat IP Service Y, dan sebaliknya. Mereka hanya perlu tahu nama target di MBG.
+2.  **Persistence**: Jika Service X mati saat Service Y sedang bekerja, MBG akan menyimpan hasil pekerjaan tersebut dan mencoba mengirimkannya kembali saat Service X hidup kembali (*Self-healing via Retry*).
+3.  **Scalability**: Worker Y bisa ditambah sesuka hati (horizontal scaling) tanpa mengganggu logika pengiriman balik ke X.
+
+---
+
 ## Mekanisme Keamanan & Ketahanan (Lanjutan)
 
 - **Manajemen Proses**: Penggunaan utilitas sistem (seperti `taskkill` pada Windows) selama pengujian untuk mengelola siklus hidup aplikasi secara otomatis.

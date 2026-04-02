@@ -16,6 +16,7 @@ Message Broker yang tangguh dan modern berbasis Go, dirancang untuk keandalan da
 - **Persistensi Data (Outbox Pattern)**: Pesan disimpan ke penyimpanan fisik sebelum masuk ke memori untuk menjamin durabilitas.
 - **Circuit Breaker Robust**: Melindungi sistem pengiriman/penerimaan dengan status *Closed, Open, dan Half-Open* (Mekanisme *self-healing*).
 - **Auto-Recovery**: Memulihkan antrean pesan dari file JSON secara otomatis saat startup.
+- **Pola Asynchronous Request-Reply (Smart Worker)**: Dukungan orisinal untuk alur *decoupled feedback* di mana Service X mengirim tugas ke Service Y dan menerima balasan melalui broker tanpa koneksi langsung.
 - **Aset Tersemat (Embedded)**: Dashboard web dikemas langsung ke dalam binari aplikasi menggunakan `go:embed`.
 
 ## Struktur Proyek Terbaru
@@ -59,3 +60,28 @@ Message Broker yang tangguh dan modern berbasis Go, dirancang untuk keandalan da
 ### gRPC Service
 - `BrokerService.Push`: Mengirim pesan.
 - `BrokerService.Pop`: Mengambil pesan.
+
+## Simulasi Asynchronous Request-Reply (X-Y-X)
+
+MBG mendukung simulasi di mana Service X mengirim tugas kepada Service Y dan menerima balasan secara otomatis melalui Broker.
+
+1.  **Siapkan Target Mock**:
+    Jalankan server target yang menyamar menjadi Service X dan Service Y:
+    ```bash
+    go run tests/target_mock/main.go
+    ```
+2.  **Kirim Tugas dari Service X**:
+    Kirim payload ke MBG (`8081`) dengan menyertakan `reply_to` yang merujuk pada target callback:
+    ```json
+    {
+      "id": "TASK-001",
+      "target": "worker-service",
+      "payload": {
+        "task": "render-video",
+        "reply_to": "callback-service"
+      }
+    }
+    ```
+3.  **Pantau Log**:
+    - **Worker Y** (Port 9090) akan menerima tugas.
+    - Setelah jeda pemrosesan, **Service X** (Port 9091) akan menerima pesan konfirmasi "COMPLETED" dari MBG.

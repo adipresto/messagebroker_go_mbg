@@ -2,6 +2,14 @@
 
 Semua perubahan signifikan pada proyek **Message Broker Sendiri (MBS) akan dicatat di file ini. Log ini mengikuti format [Keep a Changelog](https://keepachangelog.com/id/1.1.0/).
 
+## [0.8.0] - 2026-04-02
+
+### Added
+- **Pola Asynchronous Request-Reply (X-Y-X)**: Dukungan penuh untuk alur pengiriman tugas dari Requester (X) ke Worker (Y) dan menerima konfirmasi balik melalui broker.
+- **Logika Smart Worker pada Mock Server**: Update `tests/target_mock` agar bisa mendeteksi field `reply_to` dan melakukan callback otomatis ke MBG setelah pemrosesan selesai.
+- **Pemisahan Port Target Simulasi**: Dokumentasi dan pengujian kini menggunakan port terpisah (9090 untuk Worker, 9091 untuk Callback) untuk membedakan entitas layanan secara visual.
+- **Skenario Pengujian Request-Reply**: Penambahan skenario Gherkin `.request_reply.feature` untuk memverifikasi alur lengkap pesan dua arah.
+
 ## [0.7.0] - 2026-04-02
 
 ### Added

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -47,7 +48,7 @@ func (s *MockTargetServer) Deliver(ctx context.Context, req *proto.DeliveryReque
 // HTTP Handlers
 func (s *MockTargetServer) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	// Log HTTP Headers
-	log.Printf("[HTTP Headers] %v", r.Header)
+	log.Printf("[HTTP Webhook] Headers: %v", r.Header)
 
 	var body map[string]interface{}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -55,14 +56,52 @@ func (s *MockTargetServer) handleWebhook(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	log.Printf("[HTTP Webhook Body] Received: %v", body)
+	log.Printf("[HTTP Webhook] Received task for Y: %v", body)
 
-	// Kembalikan payload dengan penambahan metadata
-	body["processed_at"] = time.Now().Unix()
-	body["status"] = "SUCCESS"
+	// Logika Smart Worker: Jika ada 'reply_to', kirim balasan balik ke MBG
+	if replyTo, ok := body["reply_to"].(string); ok {
+		log.Printf("[HTTP Webhook] Smart Worker detected 'reply_to': %s. Triggering reply to MBG...", replyTo)
+		
+		go func() {
+			// Kasih sedikit jeda simulasi pemrosesan
+			time.Sleep(2 * time.Second)
+
+			replyPayload := map[string]interface{}{
+				"target": replyTo,
+				"payload": map[string]interface{}{
+					"task_id": body["task_id"],
+					"status":  "COMPLETED",
+					"worker":  "mock-worker-y",
+				},
+			}
+			
+			data, _ := json.Marshal(replyPayload)
+			// POST balik ke MBG (Default port 8081)
+			resp, err := http.Post("http://localhost:8081/api/messages", "application/json", bytes.NewBuffer(data))
+			if err != nil {
+				log.Printf("[HTTP Webhook] Failed to send reply to MBG: %v", err)
+				return
+			}
+			defer resp.Body.Close()
+			log.Printf("[HTTP Webhook] Reply sent to MBG status: %s", resp.Status)
+		}()
+	}
+
+	// Kembalikan payload dengan penambahan metadata (ACK ke MBG)
+	body["processed_by"] = "mock-worker-y"
+	body["status"] = "RECEIVED"
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(body)
+}
+
+func (s *MockTargetServer) handleCallback(w http.ResponseWriter, r *http.Request) {
+	var body map[string]interface{}
+	json.NewDecoder(r.Body).Decode(&body)
+	log.Printf("[HTTP Callback] Service X received 'DONE' confirmation! Payload: %v", body)
+	
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("Acknowledged by X"))
 }
 
 func (s *MockTargetServer) handleFail(w http.ResponseWriter, r *http.Request) {
@@ -91,6 +130,7 @@ func main() {
 	go func() {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/webhook", server.handleWebhook)
+		mux.HandleFunc("/api/callback", server.handleCallback)
 		log.Println("Mock Target HTTP Webhook listening on :9090")
 		if err := http.ListenAndServe(":9090", mux); err != nil {
 			log.Fatalf("HTTP server 9090 failed: %v", err)
