@@ -7,6 +7,57 @@ const queueCount = document.getElementById('queue-count');
 const dlqCount = document.getElementById('dlq-count');
 const lastUpdate = document.getElementById('last-update');
 const logContainer = document.getElementById('log-container');
+const targetsBody = document.getElementById('targets-body');
+
+function loadTargets() {
+    fetch('/api/targets')
+        .then(response => response.json())
+        .then(targets => renderTargets(targets))
+        .catch(err => {
+            console.error('Failed to load targets:', err);
+            if (targetsBody) {
+                targetsBody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: var(--error); padding: 1.5rem;">Error loading targets</td></tr>';
+            }
+        });
+}
+
+function renderTargets(targets) {
+    if (!targetsBody) return;
+    targetsBody.innerHTML = '';
+    if (!targets || targets.length === 0) {
+        targetsBody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: var(--text-secondary); padding: 1.5rem;">No targets registered</td></tr>';
+        return;
+    }
+    targets.forEach(target => {
+        const row = document.createElement('tr');
+        
+        const nameCell = document.createElement('td');
+        nameCell.textContent = target.name;
+        nameCell.style.fontWeight = '600';
+        row.appendChild(nameCell);
+        
+        const urlCell = document.createElement('td');
+        urlCell.textContent = target.url;
+        urlCell.style.fontFamily = "'JetBrains Mono', monospace";
+        urlCell.style.fontSize = "0.875rem";
+        row.appendChild(urlCell);
+        
+        const headersCell = document.createElement('td');
+        if (target.headers && Object.keys(target.headers).length > 0) {
+            Object.entries(target.headers).forEach(([k, v]) => {
+                const tag = document.createElement('span');
+                tag.className = 'header-tag';
+                tag.textContent = `${k}: ${v}`;
+                headersCell.appendChild(tag);
+            });
+        } else {
+            headersCell.innerHTML = '<span style="color: var(--text-secondary); opacity: 0.5;">None</span>';
+        }
+        row.appendChild(headersCell);
+        
+        targetsBody.appendChild(row);
+    });
+}
 
 // Reactive WebSocket Subject
 const socket$ = new Subject();
@@ -19,6 +70,7 @@ function connect() {
         statusBadge.textContent = 'ONLINE';
         statusBadge.className = 'badge online';
         addLog('System', 'WebSocket connected', 'system');
+        loadTargets();
     };
 
     socket.onmessage = (event) => {
@@ -55,6 +107,11 @@ socket$.pipe(
         // Update CB Statuses
         updateCBStatus('storage', data.storage_cb);
         updateCBStatus('network', data.network_cb);
+
+        // [Reactive] Update targets if provided in the stream
+        if (data.targets) {
+            renderTargets(data.targets);
+        }
         
         // Log update only if data changed
         addLog('Broker', `Update received - Q: ${data.queue_size}, DLQ: ${data.dlq_size}, Storage: ${data.storage_cb.state}, Net: ${data.network_cb.state}`, 'pop');

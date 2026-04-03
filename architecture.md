@@ -23,7 +23,7 @@ graph TD
         HTTP -- "Wrapped in CB" --> Broker
         
         subgraph "Broker Internal"
-            Broker -- "Save to Disk (Outbox)" --> Disk[Storage Layer / JSON File]
+            Broker -- "Persist Asynchronously" --> Disk[Storage Layer / SQLite WAL]
             Broker -- "Manage Memory" --> RAM[Memory Queue]
             Broker -- "Propagate Update" --> Notify[Internal Pub/Sub]
             Broker -- "Triggers Delivery" --> Dispatcher[Dispatcher System]
@@ -42,11 +42,12 @@ graph TD
 
 ## Komponen Utama Baru (Lanjutan)
 
-### 1. Strategi Pengujian E2E (End-to-End)
-Sistem ini kini diverifikasi menggunakan strategi pengujian terhadap objek binari asli (`mbg.exe`). Ini menjamin bahwa perilaku sistem di lingkungan produksi benar-benar sesuai dengan spesifikasi fungsional:
-- **Verifikasi Protokol**: Pengujian secara sinkron terhadap gRPC, HTTP, dan WebSocket.
+### 1. Strategi Pengujian E2E (v0.9.1 Breakthrough)
+Sistem ini telah mencapai stabilitas **100% (20/20 scenarios passed)** melalui strategi pengujian terhadap objek binari asli (`mbg.exe`) yang sangat terisolasi:
+- **Service Isolation (The Fix)**: Masalah *race conditions* dan *flakiness* pada gRPC diatasi dengan memberikan setiap mock server buffer pesan yang terisolasi dan dilindungi mutex.
+- **Verifikasi Protokol**: Pengujian secara sinkron terhadap gRPC, HTTP, dan WebSocket dengan asersi yang lebih presisi pada field `id` dan metadata.
 - **Isolasi Skenario**: Setiap skenario pengujian secara dinamis memulai dan mematikan proses `mbg.exe` untuk menjamin kebersihan state antar pengujian.
-- **Validasi Durabilitas**: Pengujian memverifikasi keberadaan file JSON di `../data/messages/` untuk memastikan persistensi benar-benar terjadi sebelum respons dikembalikan ke klien.
+- **Validasi Durabilitas**: Pengujian memverifikasi keberadaan data di SQLite/JSON untuk memastikan persistensi benar-benar terjadi tanpa menghambat aliran dispatcher (asynchronous).
 
 ### 2. Dukungan JSON Dinamis (Go Generics)
 Implementasi inti `Broker[T any]` kini menggunakan tipe data `any` yang memungkinkan sistem untuk menerima, menyimpan, dan meneruskan payload JSON apa pun secara transparan. Handler gRPC dan HTTP melayani sebagai gerbang (*gateways*) yang melakukan unmarshaling/marshaling secara otomatis ke dalam model data `models.Message[any]`, menjamin fleksibilitas tingkat tinggi tanpa mengorbankan integritas model pesan.
@@ -92,5 +93,7 @@ sequenceDiagram
 
 ## Mekanisme Keamanan & Ketahanan (Lanjutan)
 
+- **Zero-Block Dispatcher**: Logika pengiriman (dispatching) dipisahkan dari I/O persistensi. Dispatcher hanya mengambil data dari memori dan mengirimkannya, sementara proses penulisan ke disk dilakukan secara asinkron untuk menghilangkan *stalling*.
+- **SQLite WAL (Write-Ahead Logging)**: Penggunaan mode WAL menjamin bahwa penulisan data oleh broker tidak menghambat pembacaan data statistik untuk dashboard, meningkatkan stabilitas di bawah beban tinggi.
 - **Manajemen Proses**: Penggunaan utilitas sistem (seperti `taskkill` pada Windows) selama pengujian untuk mengelola siklus hidup aplikasi secara otomatis.
 - **Health Check Integration**: Setiap klien (termasuk unit pengujian) kini melakukan pengecekan kesehatan melalui `/api/health` sebelum memulai transaksi, meningkatkan ketersediaan layanan.

@@ -19,6 +19,7 @@ type Broker[T any] struct {
 	deadLetterPath string
 	listeners      []chan struct{}
 	cb             *circuitbreaker.CircuitBreaker
+	dlqSize        int
 }
 
 func NewBroker[T any](storagePath string, deadLetterPath string, cb *circuitbreaker.CircuitBreaker) *Broker[T] {
@@ -99,6 +100,15 @@ func (b *Broker[T]) Recover() {
 		}
 	}
 	fmt.Printf("Successfully recovered %d messages\n", count)
+
+	// One-time scan of DLQ size
+	dlqFiles, _ := os.ReadDir(b.deadLetterPath)
+	b.dlqSize = 0
+	for _, f := range dlqFiles {
+		if !f.IsDir() && filepath.Ext(f.Name()) == ".json" {
+			b.dlqSize++
+		}
+	}
 }
 
 // Push menambahkan pesan ke persistensi dulu, baru ke memori (Outbox style)
@@ -214,6 +224,9 @@ func (b *Broker[T]) MoveToDLQ(id string) error {
 	}
 
 	fmt.Printf(" [DLQ] Message %s moved to dead letter queue\n", id)
+	b.mu.Lock()
+	b.dlqSize++
+	b.mu.Unlock()
 	return nil
 }
 
@@ -313,18 +326,8 @@ func (b *Broker[T]) notify() {
 // GetStats returns the current number of messages in the queue and DLQ.
 func (b *Broker[T]) GetStats() (int, int) {
 	b.mu.RLock()
-	queueSize := len(b.messages)
-	b.mu.RUnlock()
-
-	dlqFiles, _ := os.ReadDir(b.deadLetterPath)
-	dlqSize := 0
-	for _, f := range dlqFiles {
-		if !f.IsDir() && filepath.Ext(f.Name()) == ".json" {
-			dlqSize++
-		}
-	}
-
-	return queueSize, dlqSize
+	defer b.mu.RUnlock()
+	return len(b.messages), b.dlqSize
 }
 
 // GetCBState returns the current state of the circuit breaker.

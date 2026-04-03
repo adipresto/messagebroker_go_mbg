@@ -15,16 +15,64 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/cucumber/godog"
+	"github.com/gorilla/websocket"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 )
 
+type mockService struct {
+	mu             sync.Mutex
+	pushedMsgs     []models.Message[any]
+	pushedHeaders  []map[string]string
+	pushedBodies   [][]byte
+
+	// Life-cycle management
+	httpSrv *httptest.Server
+	grpcSrv *grpc.Server
+	lis     net.Listener
+}
+
+func (s *mockService) Push(msg models.Message[any], headers map[string]string, body []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pushedMsgs = append(s.pushedMsgs, msg)
+	s.pushedHeaders = append(s.pushedHeaders, headers)
+	s.pushedBodies = append(s.pushedBodies, body)
+}
+
+func (s *mockService) GetAllMessages() []models.Message[any] {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res := make([]models.Message[any], len(s.pushedMsgs))
+	copy(res, s.pushedMsgs)
+	return res
+}
+
+func (s *mockService) GetHeaders() []map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res := make([]map[string]string, len(s.pushedHeaders))
+	copy(res, s.pushedHeaders)
+	return res
+}
+
+func (s *mockService) GetBodies() [][]byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res := make([][]byte, len(s.pushedBodies))
+	copy(res, s.pushedBodies)
+	return res
+}
+
 type testContext struct {
+	mu sync.Mutex // For thread safety across shared context
+
 	threshold   int
 	timeout     time.Duration
 	storageDir  string
@@ -40,32 +88,32 @@ type testContext struct {
 	// Clients
 	grpcClient proto.BrokerServiceClient
 	grpcConn   *grpc.ClientConn
+	httpClient *http.Client
 
 	// Mock Targets
-	mockServers    []*httptest.Server
-	mockServerGRPC *grpc.Server
+	services       map[string]*mockService // URL/Addr -> Isolated Storage
 	lastTarget     string
-	pushedMsgs     map[string][]models.Message[any] // URL -> Messages
-	pushedHeaders  map[string][]map[string]string   // URL -> Headers (index matches pushedMsgs)
-	pushedBodies   map[string][][]byte              // URL -> Bodies (index matches pushedMsgs)
-	activeMsgID    string                              // Track the most recently pushed message ID for context
-	lastCBState    string                              // Track last state for clear error messages
+	activeMsgID    string // Track the most recently pushed message ID for context
+	lastCBState    string // Track last state for clear error messages
+
+	// WebSocket for Dashboard testing
+	wsConn *websocket.Conn
+	wsMsgs chan []byte
 }
 
 type mockTargetTestServer struct {
 	proto.UnimplementedTargetServiceServer
-	tc *testContext
+	tc   *testContext
+	addr string
 }
 
 func (s *mockTargetTestServer) Deliver(ctx context.Context, req *proto.DeliveryRequest) (*proto.DeliveryResponse, error) {
-	addr := "grpc://localhost:55052" // Standard test addr
 	msg := models.Message[any]{
 		ID:      req.Id,
 		Payload: req.Payload,
 	}
-	s.tc.pushedMsgs[addr] = append(s.tc.pushedMsgs[addr], msg)
 
-	// Capture headers (from metadata and field)
+	// Capture headers
 	headers := make(map[string]string)
 	if md, ok := metadata.FromIncomingContext(ctx); ok {
 		for k, v := range md {
@@ -74,8 +122,6 @@ func (s *mockTargetTestServer) Deliver(ctx context.Context, req *proto.DeliveryR
 			}
 		}
 	}
-
-	// Also parse field if it's there
 	if req.Headers != "" {
 		var fieldHeaders map[string]string
 		if err := json.Unmarshal([]byte(req.Headers), &fieldHeaders); err == nil {
@@ -85,8 +131,17 @@ func (s *mockTargetTestServer) Deliver(ctx context.Context, req *proto.DeliveryR
 		}
 	}
 
-	s.tc.pushedHeaders[addr] = append(s.tc.pushedHeaders[addr], headers)
+	// Route to the correct isolated service
+	s.tc.mu.Lock()
+	svc, ok := s.tc.services[s.addr]
+	if !ok {
+		// Auto-register if not found (should be registered already)
+		svc = &mockService{}
+		s.tc.services[s.addr] = svc
+	}
+	s.tc.mu.Unlock()
 
+	svc.Push(msg, headers, nil)
 	return &proto.DeliveryResponse{Status: "SUCCESS"}, nil
 }
 
@@ -112,17 +167,26 @@ func (c *testContext) reset() {
 	_ = exec.Command("taskkill", "/F", "/IM", "mbg.exe", "/T").Run()
 	time.Sleep(2500 * time.Millisecond)
 
-	for _, s := range c.mockServers {
-		s.Close()
+	// Stop all mock services (HTTP & gRPC)
+	c.mu.Lock()
+	for _, svc := range c.services {
+		if svc.httpSrv != nil {
+			svc.httpSrv.Close()
+		}
+		if svc.grpcSrv != nil {
+			svc.grpcSrv.Stop()
+		}
+		if svc.lis != nil {
+			svc.lis.Close()
+		}
 	}
-	c.mockServers = nil
-	if c.mockServerGRPC != nil {
-		c.mockServerGRPC.Stop()
-		c.mockServerGRPC = nil
-	}
-	c.pushedMsgs = make(map[string][]models.Message[any])
-	c.pushedHeaders = make(map[string][]map[string]string)
-	c.pushedBodies = make(map[string][][]byte)
+	c.mu.Unlock()
+
+	// Initialize isolated services
+	c.mu.Lock()
+	c.services = make(map[string]*mockService)
+	c.mu.Unlock()
+
 	c.lastTarget = ""
 	if c.grpcConn != nil {
 		c.grpcConn.Close()
@@ -141,6 +205,13 @@ func (c *testContext) reset() {
 	// Ensure clean state on disk after process is dead
 	c.purgeStorage()
 
+	if c.wsConn != nil {
+		c.wsConn.Close()
+		c.wsConn = nil
+	}
+	c.wsMsgs = make(chan []byte, 100)
+	c.httpClient = &http.Client{Timeout: 10 * time.Second}
+
 	// Truncate CB telemetry log
 	cbLog, _ := filepath.Abs("../data/cb_log/cb_telemetry.log")
 	os.WriteFile(cbLog, []byte(""), 0644)
@@ -155,7 +226,7 @@ func (c *testContext) drainQueue() {
 	url := fmt.Sprintf("%s/api/messages", c.httpBaseURL)
 	maxAttempts := 50
 	for i := 0; i < maxAttempts; i++ {
-		resp, err := http.Get(url)
+		resp, err := c.httpClient.Get(url)
 		if err != nil || resp.StatusCode == http.StatusNotFound {
 			if resp != nil {
 				resp.Body.Close()
@@ -220,7 +291,7 @@ func (c *testContext) theConfigurationHasThresholdSetTo(threshold int) error {
 	url := fmt.Sprintf("%s/api/test/config", c.httpBaseURL)
 	body := map[string]interface{}{"threshold": threshold, "timeout_seconds": int(c.timeout.Seconds())}
 	data, _ := json.Marshal(body)
-	resp, err := http.Post(url, "application/json", bytes.NewBuffer(data))
+	resp, err := c.httpClient.Post(url, "application/json", bytes.NewBuffer(data))
 	if err != nil {
 		return err
 	}
@@ -233,7 +304,7 @@ func (c *testContext) theConfigurationHasTimeoutSetToSeconds(seconds int) error 
 	url := fmt.Sprintf("%s/api/test/config", c.httpBaseURL)
 	body := map[string]interface{}{"threshold": c.threshold, "timeout_seconds": seconds}
 	data, _ := json.Marshal(body)
-	resp, err := http.Post(url, "application/json", bytes.NewBuffer(data))
+	resp, err := c.httpClient.Post(url, "application/json", bytes.NewBuffer(data))
 	if err != nil {
 		return err
 	}
@@ -605,12 +676,14 @@ func (c *testContext) theConsumerShouldReceiveMessageViaGRPC(id string) error {
 
 func (c *testContext) theProducerSendsMessageViaPOST(id, payload, path string) error {
 	msg := models.Message[any]{ID: id, Payload: payload}
+	c.activeMsgID = id
 	data, _ := json.Marshal(msg)
 	url := fmt.Sprintf("%s%s", c.httpBaseURL, path)
-	resp, err := http.Post(url, "application/json", bytes.NewBuffer(data))
+	resp, err := c.httpClient.Post(url, "application/json", bytes.NewBuffer(data))
 	if err != nil {
 		return err
 	}
+	defer resp.Body.Close()
 	c.lastResp = resp
 	return nil
 }
@@ -630,10 +703,11 @@ func (c *testContext) theConsumerShouldReceiveMessageViaHTTP(id string) error {
 }
 
 func (c *testContext) theDashboardIsAccessible() error {
-	resp, err := http.Get(c.httpBaseURL + "/")
+	resp, err := c.httpClient.Get(c.httpBaseURL + "/")
 	if err != nil {
 		return err
 	}
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("dashboard not accessible: %d", resp.StatusCode)
 	}
@@ -646,7 +720,7 @@ func (c *testContext) aProducerPushesAMessageViaGRPC(id string) error {
 
 func (c *testContext) theDashboardStatsShouldShowQueueSizeAs(expected int) error {
 	url := fmt.Sprintf("%s/api/stats", c.httpBaseURL)
-	resp, err := http.Get(url)
+	resp, err := c.httpClient.Get(url)
 	if err != nil {
 		return err
 	}
@@ -662,7 +736,7 @@ func (c *testContext) theDashboardStatsShouldShowQueueSizeAs(expected int) error
 
 func (c *testContext) theDashboardStatsShouldShowDlqSizeAs(expected int) error {
 	url := fmt.Sprintf("%s/api/stats", c.httpBaseURL)
-	resp, err := http.Get(url)
+	resp, err := c.httpClient.Get(url)
 	if err != nil {
 		return err
 	}
@@ -712,10 +786,11 @@ func (c *testContext) theProducerSendsTheFollowingJSONPayloadViaPOST(path string
 
 	data, _ := json.Marshal(msg)
 	url := fmt.Sprintf("%s%s", c.httpBaseURL, path)
-	resp, err := http.Post(url, "application/json", bytes.NewBuffer(data))
+	resp, err := c.httpClient.Post(url, "application/json", bytes.NewBuffer(data))
 	if err != nil {
 		return err
 	}
+	defer resp.Body.Close()
 	c.lastResp = resp
 	c.activeMsgID = msg.ID
 	return nil
@@ -726,7 +801,7 @@ func (c *testContext) theBrokerHasARegisteredTarget(target string) error {
 	// Fallback/Legacy support: Use URL as Name if name is not provided
 	body := map[string]string{"name": target, "url": target}
 	data, _ := json.Marshal(body)
-	resp, err := http.Post(url, "application/json", bytes.NewBuffer(data))
+	resp, err := c.httpClient.Post(url, "application/json", bytes.NewBuffer(data))
 	if err != nil {
 		return err
 	}
@@ -749,7 +824,7 @@ func (c *testContext) theBrokerHasTheFollowingRegisteredTargets(dt *godog.Table)
 		url := fmt.Sprintf("%s/api/targets", c.httpBaseURL)
 		body := map[string]string{"name": name, "url": targetUrl}
 		data, _ := json.Marshal(body)
-		resp, err := http.Post(url, "application/json", bytes.NewBuffer(data))
+		resp, err := c.httpClient.Post(url, "application/json", bytes.NewBuffer(data))
 		if err != nil {
 			return err
 		}
@@ -768,15 +843,21 @@ func (c *testContext) aMockServerIsListeningAt(addr string) error {
 		cleanAddr = strings.Split(cleanAddr, "/")[0]
 	}
 
+	// Initialize the isolated service storage for this address
+	c.mu.Lock()
+	svc := &mockService{}
+	c.services[addr] = svc
+	c.mu.Unlock()
+
 	if strings.HasPrefix(addr, "grpc://") {
-		cleanAddr := strings.TrimPrefix(addr, "grpc://")
 		lis, err := net.Listen("tcp", cleanAddr)
 		if err != nil {
 			return err
 		}
-		c.mockServerGRPC = grpc.NewServer()
-		proto.RegisterTargetServiceServer(c.mockServerGRPC, &mockTargetTestServer{tc: c})
-		go c.mockServerGRPC.Serve(lis)
+		svc.grpcSrv = grpc.NewServer()
+		svc.lis = lis
+		proto.RegisterTargetServiceServer(svc.grpcSrv, &mockTargetTestServer{tc: c, addr: addr})
+		go svc.grpcSrv.Serve(lis)
 		return nil
 	}
 
@@ -784,10 +865,9 @@ func (c *testContext) aMockServerIsListeningAt(addr string) error {
 	mockSrv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Reconstruct Message object for test compatibility
 		msgID := r.Header.Get("X-Message-ID")
-		
+
 		bodyBytes, _ := io.ReadAll(r.Body)
 		var payload any
-		// Try to unmarshal as JSON, if it fails, treat as raw string (though broker always marshals)
 		if err := json.Unmarshal(bodyBytes, &payload); err != nil {
 			payload = string(bodyBytes)
 		}
@@ -796,20 +876,19 @@ func (c *testContext) aMockServerIsListeningAt(addr string) error {
 			ID:      msgID,
 			Payload: payload,
 		}
-		c.pushedMsgs[addr] = append(c.pushedMsgs[addr], msg)
-		c.pushedBodies[addr] = append(c.pushedBodies[addr], bodyBytes)
 
 		// Capture headers
 		headers := make(map[string]string)
 		for k := range r.Header {
 			headers[k] = r.Header.Get(k)
 		}
-		c.pushedHeaders[addr] = append(c.pushedHeaders[addr], headers)
+
+		// Push to the isolated service storage
+		svc.Push(msg, headers, bodyBytes)
 
 		// SMART WORKER LOGIC FOR TEST
 		if pMap, ok := payload.(map[string]interface{}); ok {
 			if replyTo, ok := pMap["reply_to"].(string); ok {
-				// Trigger reply in background
 				go func(rt string, taskID interface{}) {
 					time.Sleep(1 * time.Second)
 					reply := map[string]interface{}{
@@ -820,7 +899,11 @@ func (c *testContext) aMockServerIsListeningAt(addr string) error {
 						},
 					}
 					data, _ := json.Marshal(reply)
-					http.Post(fmt.Sprintf("%s/api/messages", c.httpBaseURL), "application/json", bytes.NewBuffer(data))
+					client := &http.Client{Timeout: 5 * time.Second}
+					resp, err := client.Post(fmt.Sprintf("%s/api/messages", c.httpBaseURL), "application/json", bytes.NewBuffer(data))
+					if err == nil {
+						resp.Body.Close()
+					}
 				}(replyTo, pMap["task_id"])
 			}
 		}
@@ -828,14 +911,13 @@ func (c *testContext) aMockServerIsListeningAt(addr string) error {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	// Dynamically listen on the port provided in addr
 	l, err := net.Listen("tcp", cleanAddr)
 	if err != nil {
 		return fmt.Errorf("failed to listen on %s: %w", cleanAddr, err)
 	}
 	mockSrv.Listener = l
 	mockSrv.Start()
-	c.mockServers = append(c.mockServers, mockSrv)
+	svc.httpSrv = mockSrv
 	return nil
 }
 
@@ -853,7 +935,16 @@ func (c *testContext) aMockServerAtReturnsError(addr string) error {
 	}
 	mockSrv.Listener = l
 	mockSrv.Start()
-	c.mockServers = append(c.mockServers, mockSrv)
+	
+	c.mu.Lock()
+	svc, ok := c.services[addr]
+	if !ok {
+		svc = &mockService{}
+		c.services[addr] = svc
+	}
+	svc.httpSrv = mockSrv
+	c.mu.Unlock()
+	
 	return nil
 }
 
@@ -867,23 +958,36 @@ func (c *testContext) theMockServerShouldReceiveMessage(id string) error {
 		case <-timeout:
 			return fmt.Errorf("mock server never received message %s", id)
 		case <-tick.C:
-			// Check all targets to see if ANY received it (for non-selective tests)
-			for _, msgs := range c.pushedMsgs {
+			// Check all isolated services to see if ANY received it
+			c.mu.Lock()
+			for _, svc := range c.services {
+				msgs := svc.GetAllMessages()
 				for _, m := range msgs {
 					if m.ID == id {
+						c.mu.Unlock()
 						return nil
 					}
 				}
 			}
+			c.mu.Unlock()
 		}
 	}
 }
 
 func (c *testContext) theMockServerAtShouldNOTReceiveMessage(addr, id string) error {
-	msgs := c.pushedMsgs[addr]
-	for _, m := range msgs {
-		if m.ID == id {
-			return fmt.Errorf("mock server %s unexpectedly received message %s", addr, id)
+	// Wait a bit to ensure it DOES NOT arrive
+	time.Sleep(2 * time.Second)
+
+	c.mu.Lock()
+	svc, ok := c.services[addr]
+	c.mu.Unlock()
+
+	if ok {
+		msgs := svc.GetAllMessages()
+		for _, m := range msgs {
+			if m.ID == id {
+				return fmt.Errorf("mock server at %s received message %s but it should NOT have", addr, id)
+			}
 		}
 	}
 	return nil
@@ -900,7 +1004,7 @@ func (c *testContext) theMessageShouldEventuallyBeDeletedFromTheQueue(id string)
 			return fmt.Errorf("message %s still in queue after 5s", id)
 		case <-tick.C:
 			url := fmt.Sprintf("%s/api/stats", c.httpBaseURL)
-			resp, err := http.Get(url)
+			resp, err := c.httpClient.Get(url)
 			if err != nil {
 				continue
 			}
@@ -917,7 +1021,7 @@ func (c *testContext) theMessageShouldEventuallyBeDeletedFromTheQueue(id string)
 
 func (c *testContext) theMessageShouldStayInTheQueue(id string) error {
 	url := fmt.Sprintf("%s/api/stats", c.httpBaseURL)
-	resp, err := http.Get(url)
+	resp, err := c.httpClient.Get(url)
 	if err != nil {
 		return err
 	}
@@ -942,7 +1046,7 @@ func (c *testContext) itsRetryCountShouldBe(count int) error {
 			return fmt.Errorf("message %s retry count never reached %d after 5s", id, count)
 		case <-tick.C:
 			url := fmt.Sprintf("%s/api/messages/all", c.httpBaseURL)
-			resp, err := http.Get(url)
+			resp, err := c.httpClient.Get(url)
 			if err != nil {
 				continue
 			}
@@ -995,7 +1099,16 @@ func (c *testContext) aMockServerAtAlwaysReturnsError(addr string) error {
 	}
 	mockSrv.Listener = l
 	mockSrv.Start()
-	c.mockServers = append(c.mockServers, mockSrv)
+
+	c.mu.Lock()
+	svc, ok := c.services[addr]
+	if !ok {
+		svc = &mockService{}
+		c.services[addr] = svc
+	}
+	svc.httpSrv = mockSrv
+	c.mu.Unlock()
+
 	return nil
 }
 
@@ -1010,7 +1123,7 @@ func (c *testContext) theMessageShouldBeRemovedFromTheMainQueue(id string) error
 			return fmt.Errorf("message %s still in queue after 5s", id)
 		case <-tick.C:
 			url := fmt.Sprintf("%s/api/stats", c.httpBaseURL)
-			resp, err := http.Get(url)
+			resp, err := c.httpClient.Get(url)
 			if err != nil {
 				continue
 			}
@@ -1036,7 +1149,7 @@ func (c *testContext) itsNextRetryShouldBeSetAccordingToExponentialBackoff() err
 			return fmt.Errorf("message %s NextRetry was never updated after 5s", id)
 		case <-tick.C:
 			url := fmt.Sprintf("%s/api/messages/all", c.httpBaseURL)
-			resp, err := http.Get(url)
+			resp, err := c.httpClient.Get(url)
 			if err != nil {
 				continue
 			}
@@ -1074,7 +1187,7 @@ func (c *testContext) theBrokerHasTheFollowingRegisteredTargetsWithHeaders(dt *g
 			},
 		}
 		data, _ := json.Marshal(body)
-		resp, err := http.Post(url, "application/json", bytes.NewBuffer(data))
+		resp, err := c.httpClient.Post(url, "application/json", bytes.NewBuffer(data))
 		if err != nil {
 			return err
 		}
@@ -1091,10 +1204,11 @@ func (c *testContext) aProducerPushesAMessageWithPayloadAndDataTo(id, data, targ
 	c.activeMsgID = id
 	payloadData, _ := json.Marshal(msg)
 	url := fmt.Sprintf("%s/api/messages", c.httpBaseURL)
-	resp, err := http.Post(url, "application/json", bytes.NewBuffer(payloadData))
+	resp, err := c.httpClient.Post(url, "application/json", bytes.NewBuffer(payloadData))
 	if err != nil {
 		return err
 	}
+	defer resp.Body.Close()
 	c.lastResp = resp
 	return nil
 }
@@ -1109,24 +1223,30 @@ func (c *testContext) theMockServerAtShouldReceiveMessageWithHeaders(addr, id st
 		case <-timeout:
 			return fmt.Errorf("mock server %s never received message %s", addr, id)
 		case <-tick.C:
-			msgs := c.pushedMsgs[addr]
-			headersList := c.pushedHeaders[addr]
-			for i, m := range msgs {
-				if m.ID == id {
-					// Verify headers
-					receivedHeaders := headersList[i]
-					for j, row := range dt.Rows {
-						if j == 0 {
-							continue
+			c.mu.Lock()
+			svc, ok := c.services[addr]
+			c.mu.Unlock()
+
+			if ok {
+				msgs := svc.GetAllMessages()
+				headersList := svc.GetHeaders()
+				for i, m := range msgs {
+					if m.ID == id {
+						// Verify headers
+						receivedHeaders := headersList[i]
+						for j, row := range dt.Rows {
+							if j == 0 {
+								continue
+							}
+							expectedName := http.CanonicalHeaderKey(row.Cells[0].Value)
+							expectedValue := row.Cells[1].Value
+							actualValue := receivedHeaders[expectedName]
+							if actualValue != expectedValue {
+								return fmt.Errorf("expected header %s=%s, got %s", expectedName, expectedValue, actualValue)
+							}
 						}
-						expectedName := http.CanonicalHeaderKey(row.Cells[0].Value)
-						expectedValue := row.Cells[1].Value
-						actualValue := receivedHeaders[expectedName]
-						if actualValue != expectedValue {
-							return fmt.Errorf("expected header %s=%s, got %s", expectedName, expectedValue, actualValue)
-						}
+						return nil
 					}
-					return nil
 				}
 			}
 		}
@@ -1143,17 +1263,23 @@ func (c *testContext) theMockServerAtShouldReceiveOnlyThePayloadOfMessage(addr, 
 		case <-timeout:
 			return fmt.Errorf("mock server %s never received message %s", addr, id)
 		case <-tick.C:
-			msgs := c.pushedMsgs[addr]
-			bodies := c.pushedBodies[addr]
-			for i, m := range msgs {
-				if m.ID == id {
-					// Check body
-					body := string(bodies[i])
-					// One more check: make sure the body does NOT contain "created_at" (metadata)
-					if strings.Contains(body, "\"created_at\"") || strings.Contains(body, "\"target\"") {
-						return fmt.Errorf("body unexpectedly contains metadata: %s", body)
+			c.mu.Lock()
+			svc, ok := c.services[addr]
+			c.mu.Unlock()
+
+			if ok {
+				msgs := svc.GetAllMessages()
+				bodies := svc.GetBodies()
+				for i, m := range msgs {
+					if m.ID == id {
+						// Check body
+						body := string(bodies[i])
+						// Metadata should NOT be in the body
+						if strings.Contains(body, "\"created_at\"") || strings.Contains(body, "\"target\"") {
+							return fmt.Errorf("body unexpectedly contains metadata: %s", body)
+						}
+						return nil
 					}
-					return nil
 				}
 			}
 		}
@@ -1172,10 +1298,11 @@ func (c *testContext) iPushATaskToWithIDAndReply_to(target, id, replyTo string) 
 	c.activeMsgID = id
 	data, _ := json.Marshal(msg)
 	url := fmt.Sprintf("%s/api/messages", c.httpBaseURL)
-	resp, err := http.Post(url, "application/json", bytes.NewBuffer(data))
+	resp, err := c.httpClient.Post(url, "application/json", bytes.NewBuffer(data))
 	if err != nil {
 		return err
 	}
+	defer resp.Body.Close()
 	c.lastResp = resp
 	return nil
 }
@@ -1191,8 +1318,6 @@ func (c *testContext) theMockServerShouldTriggerAReplyToMBGFor(target string) er
 }
 
 func (c *testContext) serviceXShouldEventuallyReceiveTheConfirmationForTask(status, id string) error {
-	// The confirmation message will have a different ID (generated or derived)
-	// But it will have a payload containing task_id
 	timeout := time.After(7 * time.Second)
 	tick := time.NewTicker(500 * time.Millisecond)
 	defer tick.Stop()
@@ -1200,12 +1325,85 @@ func (c *testContext) serviceXShouldEventuallyReceiveTheConfirmationForTask(stat
 	for {
 		select {
 		case <-timeout:
-			return fmt.Errorf("service X never received DONE confirmation for %s", id)
+			return fmt.Errorf("service X never received %s confirmation for %s", status, id)
 		case <-tick.C:
-			for _, msgs := range c.pushedMsgs {
+			c.mu.Lock()
+			for _, svc := range c.services {
+				msgs := svc.GetAllMessages()
 				for _, m := range msgs {
 					if pMap, ok := m.Payload.(map[string]interface{}); ok {
 						if pMap["task_id"] == id && pMap["status"] == "COMPLETED" {
+							c.mu.Unlock()
+							return nil
+						}
+					}
+				}
+			}
+			c.mu.Unlock()
+		}
+	}
+}
+
+func (c *testContext) theDashboardIsAccessibleViaWebSocket() error {
+	wsURL := strings.Replace(c.httpBaseURL, "http://", "ws://", 1) + "/ws"
+	fmt.Printf(" [Test] Dialing WebSocket: %s\n", wsURL)
+	dialer := websocket.Dialer{HandshakeTimeout: 5 * time.Second}
+	conn, _, err := dialer.Dial(wsURL, nil)
+	if err != nil {
+		fmt.Printf(" [Test] Dial failed: %v\n", err)
+		return fmt.Errorf("failed to connect to dashboard websocket: %w", err)
+	}
+	fmt.Printf(" [Test] WebSocket connected\n")
+	c.wsConn = conn
+
+	// Start reading messages
+	go func() {
+		defer fmt.Printf(" [Test] WebSocket reader goroutine stopped\n")
+		for {
+			_, message, err := conn.ReadMessage()
+			if err != nil {
+				fmt.Printf(" [Test] Read error: %v\n", err)
+				return
+			}
+			fmt.Printf(" [Test] Received WS message: %d bytes\n", len(message))
+			c.wsMsgs <- message
+		}
+	}()
+
+	return nil
+}
+
+func (c *testContext) aNewTargetWithURLIsRegisteredViaPOST(name, targetUrl string) error {
+	url := fmt.Sprintf("%s/api/targets", c.httpBaseURL)
+	body := map[string]string{"name": name, "url": targetUrl}
+	data, _ := json.Marshal(body)
+	resp, err := c.httpClient.Post(url, "application/json", bytes.NewBuffer(data))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		return fmt.Errorf("failed to register target: %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func (c *testContext) theDashboardShouldReceiveAWebSocketMessageContainingTheNewTarget(name string) error {
+	timeout := time.After(10 * time.Second) // Increased for reactive updates
+	for {
+		select {
+		case <-timeout:
+			return fmt.Errorf("timeout waiting for websocket message containing target %s", name)
+		case msg := <-c.wsMsgs:
+			var data map[string]interface{}
+			if err := json.Unmarshal(msg, &data); err != nil {
+				continue
+			}
+			// Skip "stats" messages that don't have targets list
+			if targets, ok := data["targets"].([]interface{}); ok {
+				for _, t := range targets {
+					if tMap, ok := t.(map[string]interface{}); ok {
+						if tMap["name"] == name {
 							return nil
 						}
 					}
@@ -1287,6 +1485,9 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 	sc.Step(`^Service Y should receive the task$`, tc.serviceYShouldReceiveTheTask)
 	sc.Step(`^the mock server should trigger a reply to MBG for "([^"]*)"$`, tc.theMockServerShouldTriggerAReplyToMBGFor)
 	sc.Step(`^Service X should eventually receive the "([^"]*)" confirmation for task "([^"]*)"$`, tc.serviceXShouldEventuallyReceiveTheConfirmationForTask)
+	sc.Step(`^the dashboard is accessible via WebSocket$`, tc.theDashboardIsAccessibleViaWebSocket)
+	sc.Step(`^a new target "([^"]*)" with URL "([^"]*)" is registered via POST "\/api\/targets"$`, tc.aNewTargetWithURLIsRegisteredViaPOST)
+	sc.Step(`^the dashboard should receive a WebSocket message containing the new target "([^"]*)"$`, tc.theDashboardShouldReceiveAWebSocketMessageContainingTheNewTarget)
 
 	sc.Before(func(ctx context.Context, sc *godog.Scenario) (context.Context, error) {
 		tc.reset()

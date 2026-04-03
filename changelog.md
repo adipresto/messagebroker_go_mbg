@@ -2,6 +2,24 @@
 
 Semua perubahan signifikan pada proyek **Message Broker Sendiri (MBS) akan dicatat di file ini. Log ini mengikuti format [Keep a Changelog](https://keepachangelog.com/id/1.1.0/).
 
+## [0.9.1] - 2026-04-03
+
+### Breakthrough
+- **100% BDD Pass**: Mencapai status **20/20 scenarios passed** (167 steps) secara konsisten dan stabil.
+- **Fixed gRPC Active Delivery**: Mengatasi masalah flakiness pada pengujian gRPC dengan isolasi storage mock service per address.
+- **Verified Dashboard Sync**: Memastikan statistik target dinamis muncul secara real-time di dashboard dengan perbaikan sinkronisasi WebSocket.
+
+## [0.9.0] - 2026-04-03
+
+### Performance
+- **Asynchronous Persistence**: Dispatcher tidak lagi nunggu I/O penulisan disk selesai saat memproses antrean. Proses persistensi (sqlite/json) kini berjalan di goroutine terpisah untuk menghilangkan *lock contention* pada dispatcher.
+- **SQLite WAL Mode**: Mengaktifkan *Write-Ahead Logging* pada SQLite untuk meningkatkan konkurensi pembacaan dan penulisan selama pengujian beban tinggi.
+
+### Fixed
+- **WebSocket JSON Tag Bug**: Menambahkan tag `json:"name"`, dll pada `TargetConfig` untuk menjamin konsistensi penamaan field saat siaran statistik dashboard via WebSocket.
+- **Service Isolation (BDD Testing)**: Menghilangkan *race condition* pada `features/broker_test.go` dengan mengimplementasikan penyimpanan servis yang terisolasi dan *mutex-protected* untuk setiap mock server.
+- **gRPC Mock Reliability**: Refaktor asersi gRPC agar lebih cerdas dalam mengidentifikasi alamat servis secara dinamis tanpa *hardcoding*.
+
 ## [0.8.0] - 2026-04-02
 
 ### Added

@@ -8,6 +8,7 @@ import (
 	"mbg/pkg/broker"
 	"mbg/pkg/circuitbreaker"
 	"mbg/pkg/server"
+	"mbg/pkg/storage"
 	"mbg/proto/proto"
 	"net"
 	"net/http"
@@ -31,10 +32,19 @@ func main() {
 
 	// 2. Setup Core Component (Isolated Circuit Breakers with Telemetry)
 	os.MkdirAll("data/cb_log", 0755)
+	os.MkdirAll("data/db", 0755)
 	cwd, _ := os.Getwd()
 	cbLogPath := filepath.Join(cwd, "data", "cb_log", "cb_telemetry.log")
+	dbPath := filepath.Join(cwd, "data", "db", "mbg.db")
 
 	log.Printf("Circuit Breaker Telemetry Log: %s", cbLogPath)
+	log.Printf("SQLite database path: %s", dbPath)
+
+	targetStorage, err := storage.NewSQLiteTargetStorage(dbPath)
+	if err != nil {
+		log.Fatalf("Failed to initialize storage: %v", err)
+	}
+	defer targetStorage.Close()
 
 	storageCB := circuitbreaker.NewCircuitBreaker(
 		"Storage",
@@ -52,7 +62,7 @@ func main() {
 	b := broker.NewBroker[any](cfg.Broker.StoragePath, cfg.Broker.DeadLetterPath, storageCB)
 
 	// 3. Setup Dispatcher (Active Delivery)
-	disp := broker.NewDispatcher[any](b, cfg, networkCB)
+	disp := broker.NewDispatcher[any](b, cfg, networkCB, targetStorage)
 	if !*noDispatcher {
 		go disp.Start()
 	} else {

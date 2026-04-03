@@ -38,15 +38,49 @@ func NewHTTPServer(b *broker.Broker[any], d *broker.Dispatcher[any]) *HTTPServer
 }
 
 func (s *HTTPServer) StartStreaming() {
-	updates := s.broker.Subscribe()
-	for range updates {
-		s.broadcastStats()
+	brokerUpdates := s.broker.Subscribe()
+	var dispatcherUpdates chan struct{}
+	if s.dispatcher != nil {
+		dispatcherUpdates = s.dispatcher.Subscribe()
+	}
+
+	debounceTimer := time.NewTimer(100 * time.Millisecond)
+	if !debounceTimer.Stop() {
+		<-debounceTimer.C
+	}
+	needsBroadcast := false
+
+	for {
+		select {
+		case <-brokerUpdates:
+			needsBroadcast = true
+			debounceTimer.Reset(100 * time.Millisecond)
+		case <-dispatcherUpdates:
+			if dispatcherUpdates != nil {
+				needsBroadcast = true
+				debounceTimer.Reset(100 * time.Millisecond)
+			}
+		case <-debounceTimer.C:
+			if needsBroadcast {
+				s.broadcastStats()
+				needsBroadcast = false
+			}
+		}
 	}
 }
 
 func (s *HTTPServer) broadcastStats() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	// Copy connections to a slice to avoid holding the lock during network IO
+	conns := make([]*websocket.Conn, 0, len(s.conns))
+	for conn := range s.conns {
+		conns = append(conns, conn)
+	}
+	s.mu.Unlock()
+
+	if len(conns) == 0 {
+		return
+	}
 
 	queueSize, dlqSize := s.broker.GetStats()
 	storageState := s.broker.GetCBState()
@@ -72,15 +106,23 @@ func (s *HTTPServer) broadcastStats() {
 			"failures":  networkFailures,
 			"threshold": networkThreshold,
 		},
+		"targets":   s.dispatcher.GetTargets(),
 		"timestamp": time.Now().Unix(),
 	}
 
 	data, _ := json.Marshal(stats)
-	for conn := range s.conns {
-		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
-			conn.Close()
-			delete(s.conns, conn)
-		}
+	for _, conn := range conns {
+		// Spawn a goroutine for each write to prevent head-of-line blocking by slow consumers.
+		go func(c *websocket.Conn) {
+			c.SetWriteDeadline(time.Now().Add(1 * time.Second))
+			if err := c.WriteMessage(websocket.TextMessage, data); err != nil {
+				log.Printf("WS write error (removing client): %v", err)
+				c.Close()
+				s.mu.Lock()
+				delete(s.conns, c)
+				s.mu.Unlock()
+			}
+		}(conn)
 	}
 }
 
@@ -93,6 +135,7 @@ func (s *HTTPServer) Handler() http.Handler {
 	mux.HandleFunc("GET /api/messages/all", s.handleAll)
 	mux.HandleFunc("GET /api/stats", s.handleStats)
 	mux.HandleFunc("GET /api/health", s.handleHealth)
+	mux.HandleFunc("GET /api/targets", s.handleGetTargets)
 	mux.HandleFunc("POST /api/targets", s.handleRegisterTarget)
 	mux.HandleFunc("POST /api/reset", s.handleReset)
 	mux.HandleFunc("POST /api/test/storage-path", s.handleSetStoragePath)
@@ -183,8 +226,8 @@ func (s *HTTPServer) handleWS(w http.ResponseWriter, r *http.Request) {
 	s.conns[conn] = true
 	s.mu.Unlock()
 
-	// Send initial stats
-	s.broadcastStats()
+	// Send initial stats in background to not block the upgrade
+	go s.broadcastStats()
 
 	// Keep connection alive
 	go func() {
@@ -207,18 +250,22 @@ func (s *HTTPServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *HTTPServer) handleRegisterTarget(w http.ResponseWriter, r *http.Request) {
+	log.Printf(" [HTTP] Incoming request: POST /api/targets")
 	var body config.TargetConfig
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		log.Printf(" [HTTP] Decode failed: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	if body.Name == "" || body.URL == "" {
+		log.Printf(" [HTTP] Validation failed: name and url required")
 		http.Error(w, "name and url are required", http.StatusBadRequest)
 		return
 	}
 
 	if s.dispatcher != nil {
+		log.Printf(" [HTTP] Registering target: %s (%s)", body.Name, body.URL)
 		s.dispatcher.AddTarget(body)
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(map[string]string{
@@ -226,7 +273,9 @@ func (s *HTTPServer) handleRegisterTarget(w http.ResponseWriter, r *http.Request
 			"name":   body.Name,
 			"url":    body.URL,
 		})
+		log.Printf(" [HTTP] Target %s registered successfully", body.Name)
 	} else {
+		log.Printf(" [HTTP] Error: Dispatcher not initialized")
 		http.Error(w, "dispatcher not initialized", http.StatusInternalServerError)
 	}
 }
@@ -273,4 +322,15 @@ func (s *HTTPServer) handleSetConfig(w http.ResponseWriter, r *http.Request) {
 		"threshold": body.Threshold,
 		"timeout":   body.Timeout,
 	})
+}
+
+func (s *HTTPServer) handleGetTargets(w http.ResponseWriter, r *http.Request) {
+	if s.dispatcher == nil {
+		http.Error(w, "dispatcher not initialized", http.StatusInternalServerError)
+		return
+	}
+
+	targets := s.dispatcher.GetTargets()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(targets)
 }

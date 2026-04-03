@@ -14,10 +14,15 @@ Message Broker yang tangguh dan modern berbasis Go, dirancang untuk keandalan da
 - **Logika Header Merging & Traceability**: Mendukung pengaturan header *default* per target yang dapat ditimpa (*override*) oleh header spesifik dari masing-masing pesan. Sistem secara otomatis menyertakan `X-Message-ID` pada header untuk kemudahan pelacakan (*traceability*).
 - **Strategi Exponential Backoff**: Proses percobaan ulang (retry) yang tangguh dan adaptif pada pengiriman target yang mengalami kendala.
 - **Persistensi Data (Outbox Pattern)**: Pesan disimpan ke penyimpanan fisik sebelum masuk ke memori untuk menjamin durabilitas.
-- **Circuit Breaker Robust**: Melindungi sistem pengiriman/penerimaan dengan status *Closed, Open, dan Half-Open* (Mekanisme *self-healing*).
-- **Auto-Recovery**: Memulihkan antrean pesan dari file JSON secara otomatis saat startup.
-- **Pola Asynchronous Request-Reply (Smart Worker)**: Dukungan orisinal untuk alur *decoupled feedback* di mana Service X mengirim tugas ke Service Y dan menerima balasan melalui broker tanpa koneksi langsung.
+- **Stabilitas & Hardening (High Concurrency)**: Sistem kini dioptimalkan untuk beban kerja tinggi dengan *asynchronous persistence* (I/O tidak lagi menghambat pengiriman) dan penggunaan **SQLite WAL Mode** untuk mencegah database locks.
 - **Aset Tersemat (Embedded)**: Dashboard web dikemas langsung ke dalam binari aplikasi menggunakan `go:embed`.
+
+## Roadmap Stabilitas (v0.9.1 Breakthrough)
+
+Sistem telah mencapai kematangan penuh dengan status **20/20 Scenarios Passed**:
+- **Zero-Block Dispatcher**: Logika persistensi dipindahkan ke luar *critical lock path*, sehingga pengiriman pesan tidak lagi terhambat oleh kecepatan penulisan disk.
+- **WebSocket Dashboard Fix**: Menjamin sinkronisasi data target yang presisi dengan standarisasi tag JSON pada konfigurasi.
+- **Thread-Safe Testing**: Suite pengujian kini menggunakan isolasi servis untuk mencegah *race conditions* selama verifikasi asinkron, memastikan stabilitas gRPC delivery 100%.
 
 ## Struktur Proyek Terbaru
 

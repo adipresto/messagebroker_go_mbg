@@ -10,6 +10,7 @@ import (
 	"mbg/config"
 	"mbg/pkg/models"
 	"mbg/pkg/circuitbreaker"
+	"mbg/pkg/storage"
 	"net/http"
 	"strings"
 	"sync"
@@ -26,38 +27,94 @@ type Dispatcher[T any] struct {
 	cb          *circuitbreaker.CircuitBreaker
 	client      *http.Client
 	mu          sync.RWMutex
-	targets     []config.TargetConfig
+	targets     map[string]config.TargetConfig
+	storage     storage.TargetStorage
 	taskChan    chan models.Message[T]
+	listeners   []chan struct{}
 	inProgress  sync.Map // Track messages currently being handled by workers
 }
 
-func NewDispatcher[T any](b *Broker[T], cfg *config.Config, cb *circuitbreaker.CircuitBreaker) *Dispatcher[T] {
+func NewDispatcher[T any](b *Broker[T], cfg *config.Config, cb *circuitbreaker.CircuitBreaker, s storage.TargetStorage) *Dispatcher[T] {
+	targetMap := make(map[string]config.TargetConfig)
+	for _, t := range cfg.Dispatcher.Targets {
+		targetMap[t.Name] = t
+	}
+
 	return &Dispatcher[T]{
 		broker:   b,
 		cfg:      cfg,
 		cb:       cb,
 		client:   &http.Client{Timeout: 10 * time.Second},
-		targets:  cfg.Dispatcher.Targets,
+		targets:  targetMap,
+		storage:  s,
 		taskChan: make(chan models.Message[T], 100),
 	}
 }
 
 func (d *Dispatcher[T]) AddTarget(target config.TargetConfig) {
 	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.targets = append(d.targets, target)
+	d.targets[target.Name] = target
+	d.mu.Unlock()
+
+	// Notify immediately (UI update)
+	d.notify()
+
+	// Persist to storage in background (Write-Through)
+	if d.storage != nil {
+		go func() {
+			if err := d.storage.SaveTarget(target); err != nil {
+				fmt.Printf(" [Error] Failed to persist target %s: %v\n", target.Name, err)
+			}
+		}()
+	}
 }
 
-func (d *Dispatcher[T]) getTargets() []config.TargetConfig {
+func (d *Dispatcher[T]) Subscribe() chan struct{} {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	ch := make(chan struct{}, 1)
+	d.listeners = append(d.listeners, ch)
+	return ch
+}
+
+func (d *Dispatcher[T]) notify() {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	targets := make([]config.TargetConfig, len(d.targets))
-	copy(targets, d.targets)
+	for _, ch := range d.listeners {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+}
+
+func (d *Dispatcher[T]) GetTargets() []config.TargetConfig {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	targets := make([]config.TargetConfig, 0, len(d.targets))
+	for _, t := range d.targets {
+		targets = append(targets, t)
+	}
 	return targets
 }
 
 func (d *Dispatcher[T]) Start() {
 	fmt.Println("Dispatcher started with RabbitMQ-style Competing Consumers...")
+
+	// Load targets from storage (Startup Warming)
+	if d.storage != nil {
+		storedTargets, err := d.storage.GetAllTargets()
+		if err != nil {
+			fmt.Printf(" [Error] Failed to load targets from storage: %v\n", err)
+		} else {
+			d.mu.Lock()
+			for _, t := range storedTargets {
+				d.targets[t.Name] = t
+			}
+			d.mu.Unlock()
+			fmt.Printf(" [Storage] Loaded %d targets from SQLite\n", len(storedTargets))
+		}
+	}
 
 	// Launch worker pool
 	workerCount := d.cfg.Dispatcher.WorkerCount
@@ -111,7 +168,7 @@ func (d *Dispatcher[T]) fillTaskQueue() {
 }
 
 func (d *Dispatcher[T]) processMessage(msg models.Message[T]) {
-	allTargets := d.getTargets()
+	allTargets := d.GetTargets()
 	if len(allTargets) == 0 {
 		return
 	}
