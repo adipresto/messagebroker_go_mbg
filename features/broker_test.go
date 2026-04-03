@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"mbg/api/proto"
-	"mbg/models"
+	"mbg/proto/proto"
+	"mbg/pkg/models"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -377,7 +377,7 @@ func (c *testContext) theCircuitBreakerThresholdIsSetTo(threshold int) error {
 }
 
 func (c *testContext) theCircuitBreakerShouldTransitionToState(expected string) error {
-	logPath, _ := filepath.Abs("../pkg/circuitbreaker/data/cb_telemetry.log")
+	logPath, _ := filepath.Abs("../data/cb_log/cb_telemetry.log")
 	timeout := time.After(8 * time.Second)
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()

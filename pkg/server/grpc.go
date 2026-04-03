@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"mbg/api/proto"
-	"mbg/models"
+	"mbg/proto/proto"
+	"mbg/pkg/models"
 	"mbg/pkg/broker"
 	"time"
 )

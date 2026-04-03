@@ -4,11 +4,11 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"mbg/api/proto"
 	"mbg/config"
 	"mbg/pkg/broker"
 	"mbg/pkg/circuitbreaker"
 	"mbg/pkg/server"
+	"mbg/proto/proto"
 	"net"
 	"net/http"
 	"os"
@@ -24,7 +24,7 @@ func main() {
 	flag.Parse()
 
 	// 1. Load Configuration
-	cfg, err := config.LoadConfig("config.yaml")
+	cfg, err := config.LoadConfig("config/config.yaml")
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}

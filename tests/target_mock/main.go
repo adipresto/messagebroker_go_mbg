@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"mbg/api/proto"
+	"mbg/proto/proto"
 	"net"
 	"net/http"
 	"sync"

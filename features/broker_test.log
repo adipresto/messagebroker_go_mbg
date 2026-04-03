@@ -1,15 +1,15 @@
-2026/04/02 21:10:37 Circuit Breaker Telemetry Log: C:\Users\KAINE\Documents\Development\message_broker_sendiri\data\cb_log\cb_telemetry.log
- [CB Debug] Created Storage with logPath: C:\Users\KAINE\Documents\Development\message_broker_sendiri\data\cb_log\cb_telemetry.log
- [CB Debug] Created Network with logPath: C:\Users\KAINE\Documents\Development\message_broker_sendiri\data\cb_log\cb_telemetry.log
-Recovering messages from: ./data/messages (Absolute: C:\Users\KAINE\Documents\Development\message_broker_sendiri\data\messages)
+2026/04/03 08:10:35 Circuit Breaker Telemetry Log: C:\Users\KAINE\Documents\Development\projek_di_go\message_broker_sendiri\data\cb_log\cb_telemetry.log
+ [CB Debug] Created Storage with logPath: C:\Users\KAINE\Documents\Development\projek_di_go\message_broker_sendiri\data\cb_log\cb_telemetry.log
+ [CB Debug] Created Network with logPath: C:\Users\KAINE\Documents\Development\projek_di_go\message_broker_sendiri\data\cb_log\cb_telemetry.log
+Recovering messages from: ./data/messages (Absolute: C:\Users\KAINE\Documents\Development\projek_di_go\message_broker_sendiri\data\messages)
 Successfully recovered 0 messages
 Dispatcher started with RabbitMQ-style Competing Consumers...
- [Worker 4] ready
- [Worker 1] ready
- [Worker 2] ready
- [Worker 3] ready
  [Worker 0] ready
-2026/04/02 21:10:37 Starting HTTP & Dashboard server on http://localhost:8081
-2026/04/02 21:10:37 Starting gRPC server on port 50051
+ [Worker 1] ready
+ [Worker 3] ready
+ [Worker 4] ready
+ [Worker 2] ready
+2026/04/03 08:10:35 Starting HTTP & Dashboard server on http://localhost:8081
+2026/04/03 08:10:35 Starting gRPC server on port 50051
  [Success] Message TASK-REQ-001 delivered to worker-service (http://localhost:9090/webhook)
  [Success] Message  delivered to callback-service (http://localhost:9091/api/callback)

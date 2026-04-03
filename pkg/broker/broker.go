@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"iter"
-	"mbg/models"
+	"mbg/pkg/models"
 	"mbg/pkg/circuitbreaker"
 	"os"
 	"path/filepath"

@@ -6,7 +6,7 @@ import (
 	"io/fs"
 	"log"
 	"mbg/config"
-	"mbg/models"
+	"mbg/pkg/models"
 	"mbg/pkg/broker"
 	"net/http"
 	"sync"

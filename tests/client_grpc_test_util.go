@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"log"
-	"mbg/api/proto"
+	"mbg/proto/proto"
 	"time"
 
 	"google.golang.org/grpc"
