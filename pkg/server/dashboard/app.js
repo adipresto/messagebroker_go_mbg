@@ -1,11 +1,11 @@
-const { Subject, fromEvent, merge, of } = rxjs;
-const { map, scan, filter, switchMap, catchError, retry, tap, delay } = rxjs.operators;
+const { Subject } = rxjs;
+const { tap } = rxjs.operators;
 
 const socketUrl = `ws://${window.location.host}/ws`;
 const statusBadge = document.getElementById('status-badge');
 const queueCount = document.getElementById('queue-count');
 const dlqCount = document.getElementById('dlq-count');
-const lastUpdate = document.getElementById('last-update');
+const navDlqBadge = document.getElementById('nav-dlq-badge');
 const logContainer = document.getElementById('log-container');
 const targetsBody = document.getElementById('targets-body');
 
@@ -16,7 +16,7 @@ function loadTargets() {
         .catch(err => {
             console.error('Failed to load targets:', err);
             if (targetsBody) {
-                targetsBody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: var(--error); padding: 1.5rem;">Error loading targets</td></tr>';
+                targetsBody.innerHTML = '<tr><td colspan="3" class="empty-state" style="color: var(--error);">Error loading targets. Ensure the broker is running.</td></tr>';
             }
         });
 }
@@ -24,34 +24,42 @@ function loadTargets() {
 function renderTargets(targets) {
     if (!targetsBody) return;
     targetsBody.innerHTML = '';
+    
     if (!targets || targets.length === 0) {
-        targetsBody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: var(--text-secondary); padding: 1.5rem;">No targets registered</td></tr>';
+        targetsBody.innerHTML = '<tr><td colspan="3" class="empty-state">No targets registered yet.</td></tr>';
         return;
     }
+
     targets.forEach(target => {
         const row = document.createElement('tr');
         
         const nameCell = document.createElement('td');
-        nameCell.textContent = target.name;
-        nameCell.style.fontWeight = '600';
+        nameCell.innerHTML = `
+            <div class="td-main">
+                <div class="td-main-icon">
+                    <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
+                </div>
+                <span>${target.name}</span>
+            </div>
+        `;
         row.appendChild(nameCell);
         
         const urlCell = document.createElement('td');
-        urlCell.textContent = target.url;
-        urlCell.style.fontFamily = "'JetBrains Mono', monospace";
-        urlCell.style.fontSize = "0.875rem";
+        urlCell.innerHTML = `<a href="${target.url}" target="_blank" class="td-url" style="font-family: 'JetBrains Mono', monospace; font-size: 13px;">${target.url}</a>`;
         row.appendChild(urlCell);
         
         const headersCell = document.createElement('td');
         if (target.headers && Object.keys(target.headers).length > 0) {
             Object.entries(target.headers).forEach(([k, v]) => {
                 const tag = document.createElement('span');
-                tag.className = 'header-tag';
+                tag.className = 'pill blue';
+                tag.style.marginRight = '8px';
+                tag.style.marginBottom = '4px';
                 tag.textContent = `${k}: ${v}`;
                 headersCell.appendChild(tag);
             });
         } else {
-            headersCell.innerHTML = '<span style="color: var(--text-secondary); opacity: 0.5;">None</span>';
+            headersCell.innerHTML = '<span style="color: var(--text-muted); font-size: 13px;">No custom headers</span>';
         }
         row.appendChild(headersCell);
         
@@ -67,9 +75,9 @@ function connect() {
     socket = new WebSocket(socketUrl);
 
     socket.onopen = () => {
-        statusBadge.textContent = 'ONLINE';
-        statusBadge.className = 'badge online';
-        addLog('System', 'WebSocket connected', 'system');
+        statusBadge.innerHTML = '<div class="status-dot"></div><span>Online</span>';
+        statusBadge.className = 'status-indicator online';
+        addLog('System', 'WebSocket connected successfully', 'system');
         loadTargets();
     };
 
@@ -79,10 +87,10 @@ function connect() {
     };
 
     socket.onclose = () => {
-        statusBadge.textContent = 'OFFLINE';
-        statusBadge.className = 'badge offline';
-        addLog('System', 'WebSocket disconnected, retrying...', 'system');
-        setTimeout(connect, 3000); // Simple retry
+        statusBadge.innerHTML = '<div class="status-dot"></div><span>Reconnecting</span>';
+        statusBadge.className = 'status-indicator offline';
+        addLog('System', 'WebSocket disconnected, returning...', 'system');
+        setTimeout(connect, 3000);
     };
 
     socket.onerror = (error) => {
@@ -97,24 +105,26 @@ socket$.pipe(
         dlqCount.textContent = data.dlq_size;
         
         if (data.dlq_size > 0) {
-            dlqCount.classList.remove('warning');
-            dlqCount.style.color = 'var(--error)';
+            dlqCount.className = 'stat-value danger';
+            if (navDlqBadge) {
+                navDlqBadge.style.display = 'block';
+                navDlqBadge.textContent = data.dlq_size;
+            }
         } else {
-            dlqCount.classList.add('warning');
-            dlqCount.style.color = '';
+            dlqCount.className = 'stat-value highlight';
+            if (navDlqBadge) {
+                navDlqBadge.style.display = 'none';
+            }
         }
 
-        // Update CB Statuses
         updateCBStatus('storage', data.storage_cb);
         updateCBStatus('network', data.network_cb);
 
-        // [Reactive] Update targets if provided in the stream
         if (data.targets) {
             renderTargets(data.targets);
         }
         
-        // Log update only if data changed
-        addLog('Broker', `Update received - Q: ${data.queue_size}, DLQ: ${data.dlq_size}, Storage: ${data.storage_cb.state}, Net: ${data.network_cb.state}`, 'pop');
+        addLog('Broker', `Metrics synched - Q: ${data.queue_size}, DLQ: ${data.dlq_size}`, 'pop');
     })
 ).subscribe();
 
@@ -128,16 +138,17 @@ function updateCBStatus(prefix, cb) {
     stateEl.textContent = cb.state.toUpperCase();
     infoEl.textContent = `${cb.failures}/${cb.threshold} failures`;
 
-    // Visual feedback for Open/Half-Open
-    cardEl.style.borderColor = 'rgba(255, 255, 255, 0.05)';
-    stateEl.style.color = 'var(--accent-color)';
+    cardEl.style.borderColor = 'var(--border-color)';
+    cardEl.style.boxShadow = 'var(--shadow-sm)';
 
     if (cb.state === 'Open') {
         stateEl.style.color = 'var(--error)';
-        cardEl.style.borderColor = 'var(--error)';
+        cardEl.style.borderColor = 'rgba(239, 68, 68, 0.4)';
+        cardEl.style.boxShadow = '0 0 0 1px rgba(239, 68, 68, 0.2)';
     } else if (cb.state === 'Half-Open') {
         stateEl.style.color = 'var(--warning)';
-        cardEl.style.borderColor = 'var(--warning)';
+        cardEl.style.borderColor = 'rgba(234, 179, 8, 0.4)';
+        cardEl.style.boxShadow = '0 0 0 1px rgba(234, 179, 8, 0.2)';
     } else if (cb.state === 'Closed') {
         stateEl.style.color = 'var(--success)';
     }
@@ -146,11 +157,13 @@ function updateCBStatus(prefix, cb) {
 function addLog(source, message, type) {
     const entry = document.createElement('div');
     entry.className = `log-entry ${type}`;
-    const timestamp = new Date().toLocaleTimeString();
-    entry.textContent = `[${timestamp}] [${source}] ${message}`;
+    const now = new Date();
+    const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
+    
+    entry.innerHTML = `<span class="log-time">[${timeStr}]</span> <span>[${source}] ${message}</span>`;
     logContainer.prepend(entry);
     
-    // Max 100 entries
+    // Max 100 entries limit to keep terminal fast
     if (logContainer.children.length > 100) {
         logContainer.lastChild.remove();
     }
