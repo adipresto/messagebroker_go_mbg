@@ -6,6 +6,7 @@ import (
 	"iter"
 	"mbg/pkg/models"
 	"mbg/pkg/circuitbreaker"
+	"mbg/pkg/telemetry"
 	"os"
 	"path/filepath"
 	"sync"
@@ -18,6 +19,7 @@ type Broker[T any] struct {
 	storagePath    string
 	deadLetterPath string
 	listeners      []chan struct{}
+	msgListeners   []chan models.Message[T]
 	cb             *circuitbreaker.CircuitBreaker
 	dlqSize        int
 }
@@ -32,6 +34,7 @@ func NewBroker[T any](storagePath string, deadLetterPath string, cb *circuitbrea
 		storagePath:    storagePath,
 		deadLetterPath: deadLetterPath,
 		listeners:      make([]chan struct{}, 0),
+		msgListeners:   make([]chan models.Message[T], 0),
 		cb:             cb,
 	}
 
@@ -100,6 +103,7 @@ func (b *Broker[T]) Recover() {
 		}
 	}
 	fmt.Printf("Successfully recovered %d messages\n", count)
+	telemetry.QueueSize.Set(float64(count))
 
 	// One-time scan of DLQ size
 	dlqFiles, _ := os.ReadDir(b.deadLetterPath)
@@ -130,10 +134,26 @@ func (b *Broker[T]) doPush(msg models.Message[T]) error {
 	// 2. Tambahkan ke memori
 	b.mu.Lock()
 	b.messages = append(b.messages, msg)
+	qSize := len(b.messages)
 	b.mu.Unlock()
 
+	telemetry.MessagesPushed.Inc()
+	telemetry.QueueSize.Set(float64(qSize))
 	b.notify()
+	b.broadcast(msg)
 	return nil
+}
+
+func (b *Broker[T]) broadcast(msg models.Message[T]) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	for _, ch := range b.msgListeners {
+		select {
+		case ch <- msg:
+		default:
+			// Listener is full, skip to avoid blocking the push path
+		}
+	}
 }
 
 // Pop mengambil pesan, dan menghapusnya dari disk (Commit)
@@ -147,8 +167,10 @@ func (b *Broker[T]) Pop() (models.Message[T], error) {
 
 	msg := b.messages[0]
 	b.messages = b.messages[1:]
+	qSize := len(b.messages)
 	b.mu.Unlock()
 
+	telemetry.QueueSize.Set(float64(qSize))
 	// Notify after unlock
 	b.notify()
 
@@ -197,8 +219,10 @@ func (b *Broker[T]) MoveToDLQ(id string) error {
 		}
 	}
 	b.messages = newMessages
+	qSize := len(b.messages)
 	b.mu.Unlock()
 
+	telemetry.QueueSize.Set(float64(qSize))
 	b.notify()
 
 	// Move file
@@ -254,8 +278,10 @@ func (b *Broker[T]) Acknowledge(id string) error {
 		}
 	}
 	b.messages = newMessages
+	qSize := len(b.messages)
 	b.mu.Unlock()
 
+	telemetry.QueueSize.Set(float64(qSize))
 	b.notify()
 
 	// Remove from disk outside lock
@@ -290,14 +316,23 @@ func (b *Broker[T]) Update(msg models.Message[T]) error {
 // All tetap menggunakan iterator untuk pembacaan aman
 func (b *Broker[T]) All() iter.Seq[models.Message[T]] {
 	return func(yield func(models.Message[T]) bool) {
-		// Snapshot the slice to avoid holding RLock during yield/network/JSON
+		// No longer snapshots the whole slice to avoid memory spikes.
+		// Instead, we lock briefly to get the current count and iterate with RLock protection.
 		b.mu.RLock()
-		snapshot := make([]models.Message[T], len(b.messages))
-		copy(snapshot, b.messages)
+		count := len(b.messages)
 		b.mu.RUnlock()
 
-		for _, m := range snapshot {
-			if !yield(m) {
+		for i := 0; i < count; i++ {
+			b.mu.RLock()
+			// Re-check bounds in case messages were popped/cleared during iteration
+			if i >= len(b.messages) {
+				b.mu.RUnlock()
+				break
+			}
+			msg := b.messages[i]
+			b.mu.RUnlock()
+
+			if !yield(msg) {
 				return
 			}
 		}
@@ -309,6 +344,15 @@ func (b *Broker[T]) Subscribe() chan struct{} {
 	defer b.mu.Unlock()
 	ch := make(chan struct{}, 1)
 	b.listeners = append(b.listeners, ch)
+	return ch
+}
+
+// SubscribeMessages returns a channel that receives the actual message pushed.
+func (b *Broker[T]) SubscribeMessages() chan models.Message[T] {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	ch := make(chan models.Message[T], 100)
+	b.msgListeners = append(b.msgListeners, ch)
 	return ch
 }
 

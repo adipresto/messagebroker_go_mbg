@@ -2,6 +2,21 @@
 
 Semua perubahan signifikan pada proyek **Message Broker Sendiri (MBS) akan dicatat di file ini. Log ini mengikuti format [Keep a Changelog](https://keepachangelog.com/id/1.1.0/).
 
+## [0.10.0] - 2026-04-06
+
+### Added
+- **Industrial-Standard Observability**: Menambahkan endpoint `/metrics` untuk integrasi dengan Prometheus dan pemantauan throughput/latensi waktu nyata.
+- **Runtime Profiling**: Integrasi dengan `net/http/pprof` pada endpoint `/debug/pprof/` untuk analisis performa (CPU, Memori, Goroutine).
+- **Go 1.23 Iterators Native Support**: Implementasi `iter.Seq` pada inti Broker untuk iterasi antrean yang hemat memori (O(1) space).
+
+### Changed
+- **Event-Driven Dispatcher**: Refaktorisasi menyeluruh pada sistem Dispatcher agar bersifat reaktif. Dispatcher kini tidak lagi melakukan polling internal, melainkan menunggu sinyal (channel wakeup) saat ada pesan baru (`Push`) atau jadwal retry tiba.
+- **O(log N) Priority Scheduling**: Mengganti loop pencarian retry linear dengan struktur data **Min-Heap** (Priority Queue) untuk penjadwalan retry yang sangat scalable.
+- **Optimized CPU Usage**: Mengurangi siklus CPU idle dengan mekanisme signaling yang efisien antara Broker dan Dispatcher.
+
+### Performance
+- **Zero-Copy Queue Snapshots**: Menghilangkan alokasi slice baru saat melakukan broadcast status ke dashboard atau audit eksternal.
+
 ## [0.9.1] - 2026-04-03
 
 ### Breakthrough

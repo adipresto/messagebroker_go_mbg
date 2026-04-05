@@ -1,3 +1,0 @@
-[CB_EVENT] 2026-04-02 23:23:22.025 | TestCB | Closed -> Open | failures: 3
-[CB_EVENT] 2026-04-02 23:23:22.178 | TestCB | Open -> Half-Open | failures: 0
-[CB_EVENT] 2026-04-02 23:23:22.182 | TestCB | Half-Open -> Closed | failures: 0

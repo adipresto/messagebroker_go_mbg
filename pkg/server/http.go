@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"net/http/pprof"
 )
 
 //go:embed dashboard/*
@@ -143,6 +145,14 @@ func (s *HTTPServer) Handler() http.Handler {
 
 	// WebSocket
 	mux.HandleFunc("/ws", s.handleWS)
+
+	// Metrics & Profiling
+	mux.Handle("/metrics", promhttp.Handler())
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 
 	// Dashboard
 	content, _ := fs.Sub(dashboardContent, "dashboard")

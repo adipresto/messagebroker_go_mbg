@@ -11,6 +11,7 @@ import (
 	"mbg/pkg/models"
 	"mbg/pkg/circuitbreaker"
 	"mbg/pkg/storage"
+	"mbg/pkg/telemetry"
 	"net/http"
 	"strings"
 	"sync"
@@ -19,6 +20,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"container/heap"
 )
 
 type Dispatcher[T any] struct {
@@ -32,6 +34,9 @@ type Dispatcher[T any] struct {
 	taskChan    chan models.Message[T]
 	listeners   []chan struct{}
 	inProgress  sync.Map // Track messages currently being handled by workers
+	retryHeap   MessageHeap[T]
+	retryMu     sync.Mutex
+	retryTimer  *time.Timer
 }
 
 func NewDispatcher[T any](b *Broker[T], cfg *config.Config, cb *circuitbreaker.CircuitBreaker, s storage.TargetStorage) *Dispatcher[T] {
@@ -48,6 +53,7 @@ func NewDispatcher[T any](b *Broker[T], cfg *config.Config, cb *circuitbreaker.C
 		targets:  targetMap,
 		storage:  s,
 		taskChan: make(chan models.Message[T], 100),
+		retryTimer: time.NewTimer(time.Hour), // Initially far future
 	}
 }
 
@@ -124,18 +130,72 @@ func (d *Dispatcher[T]) Start() {
 	for i := 0; i < workerCount; i++ {
 		go d.worker(i)
 	}
+	telemetry.ActiveWorkers.Set(float64(workerCount))
 
-	notify := d.broker.Subscribe()
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
+	// 1. Warm up from Disk
+	d.fillTaskQueue()
+
+	// 2. Event-Driven Loop
+	msgChan := d.broker.SubscribeMessages()
 
 	for {
 		select {
-		case <-notify:
-			d.fillTaskQueue()
-		case <-ticker.C:
-			d.fillTaskQueue()
+		case msg := <-msgChan:
+			// Reactive Push: Directly to worker queue
+			select {
+			case d.taskChan <- msg:
+			default:
+				fmt.Printf(" [Warning] Worker queue full, message %s will be picked up by check cycle\n", msg.ID)
+			}
+
+		case <-d.retryTimer.C:
+			// Scheduled Retry: Pop from heap
+			d.processRetryHeap()
 		}
+	}
+}
+
+func (d *Dispatcher[T]) processRetryHeap() {
+	d.retryMu.Lock()
+	now := time.Now().Unix()
+
+	for d.retryHeap.Len() > 0 {
+		top, _ := d.retryHeap.Peek()
+		if top.NextRetry <= now {
+			msg := heap.Pop(&d.retryHeap).(models.Message[T])
+			d.retryMu.Unlock()
+			
+			// Try to dispatch
+			select {
+			case d.taskChan <- msg:
+			default:
+				// If queue full, push back to heap (or just re-process later)
+				d.scheduleRetry(msg)
+			}
+			
+			d.retryMu.Lock()
+		} else {
+			// Reschedule timer for next message
+			d.retryTimer.Reset(time.Duration(top.NextRetry-now) * time.Second)
+			break
+		}
+	}
+	d.retryMu.Unlock()
+}
+
+func (d *Dispatcher[T]) scheduleRetry(msg models.Message[T]) {
+	d.retryMu.Lock()
+	defer d.retryMu.Unlock()
+
+	heap.Push(&d.retryHeap, msg)
+	
+	// Reset timer if this is now the soonest retry
+	top, _ := d.retryHeap.Peek()
+	if top.ID == msg.ID {
+		now := time.Now().Unix()
+		wait := msg.NextRetry - now
+		if wait < 0 { wait = 0 }
+		d.retryTimer.Reset(time.Duration(wait) * time.Second)
 	}
 }
 
@@ -190,12 +250,15 @@ func (d *Dispatcher[T]) processMessage(msg models.Message[T]) {
 	}
 
 	var lastErr error
+	start := time.Now()
 	for _, target := range targets {
 		err := d.cb.Execute(func() error {
 			return d.sendToTarget(target, msg)
 		})
 
 		if err == nil {
+			telemetry.DispatchLatency.Observe(time.Since(start).Seconds())
+			telemetry.MessagesDispatched.Inc()
 			fmt.Printf(" [Success] Message %s delivered to %s (%s)\n", msg.ID, target.Name, target.URL)
 			d.broker.Acknowledge(msg.ID)
 			return
@@ -336,11 +399,13 @@ func (d *Dispatcher[T]) sendToGRPCTarget(target config.TargetConfig, msg models.
 
 func (d *Dispatcher[T]) handleFailure(msg models.Message[T], err error) {
 	if msg.RetryCount >= d.cfg.Dispatcher.MaxRetries {
+		telemetry.MessagesFailed.WithLabelValues("max_retries").Inc()
 		fmt.Printf(" [!] Message %s reached MAX retries (%d). Moving to DLQ.\n", msg.ID, d.cfg.Dispatcher.MaxRetries)
 		d.broker.MoveToDLQ(msg.ID)
 		return
 	}
 
+	telemetry.MessagesFailed.WithLabelValues("retry").Inc()
 	msg.RetryCount++
 	// Exponential Backoff: Base * 2^RetryCount
 	backoff := int64(d.cfg.Dispatcher.BaseInterval) * int64(math.Pow(2, float64(msg.RetryCount)))
@@ -348,6 +413,9 @@ func (d *Dispatcher[T]) handleFailure(msg models.Message[T], err error) {
 
 	fmt.Printf(" [Retry] Message %s rescheduled in %ds (attempt %d)\n", msg.ID, backoff, msg.RetryCount)
 	d.broker.Update(msg)
+	
+	// Move to heap for efficient scheduling
+	d.scheduleRetry(msg)
 }
 
 func (d *Dispatcher[T]) Reset() {

@@ -1,39 +1,37 @@
-# Message Broker Golang (MBG)
+# Message Broker Golang (MBG) - v0.10.0
 
-Message Broker yang tangguh dan modern berbasis Go, dirancang untuk keandalan data (*durability*), ketahanan sistem (*resilience*), dan visibilitas waktu nyata (*real-time visibility*). Proyek ini kini mendukung protokol gRPC, REST, dan WebSocket lengkap dengan Dashboard pemantauan.
+Message Broker yang tangguh, modern, dan berperforma tinggi berbasis Go. Dirancang untuk keandalan data (*durability*), efisiensi sumber daya skala industri, dan visibilitas total melalui dashboard serta metrik Prometheus.
 
 ## Fitur Utama
 
-- **Dashboard Real-time**: Visualisasi statistik antrean secara langsung melalui antarmuka web (WebSocket & RxJS).
-- **Dukungan Multi-Protokol**:
-    - **gRPC**: Komunikasi antar layanan berperforma tinggi.
-    - **REST API**: Integrasi mudah dengan aplikasi web dan klien HTTP.
-    - **WebSocket**: *Streaming* data statistik waktu nyata khusus untuk **MBG Dashboard**. Jalur ini bersifat *read-only* untuk memantau metrik antrean.
-- **Dukungan Payload JSON Dinamis**: Pengiriman data kompleks melalui format JSON yang ditenagai oleh tipe data generik Go (`any`). Sistem ini kini mampu menangani objek JSON bersarang secara orisinal (native) tanpa perlu konversi manual.
-- **Pengiriman Otomatis (Dispatcher) & Headers**: Kemampuan mengirim payload secara otomatis ke *endpoint* eksternal target melalui HTTP maupun gRPC dengan dukungan *Custom Headers*. Secara default, sistem kini hanya mengirim **field payload** sebagai body request untuk menjaga kebersihan data.
-- **Logika Header Merging & Traceability**: Mendukung pengaturan header *default* per target yang dapat ditimpa (*override*) oleh header spesifik dari masing-masing pesan. Sistem secara otomatis menyertakan `X-Message-ID` pada header untuk kemudahan pelacakan (*traceability*).
-- **Strategi Exponential Backoff**: Proses percobaan ulang (retry) yang tangguh dan adaptif pada pengiriman target yang mengalami kendala.
-- **Persistensi Data (Outbox Pattern)**: Pesan disimpan ke penyimpanan fisik sebelum masuk ke memori untuk menjamin durabilitas.
-- **Stabilitas & Hardening (High Concurrency)**: Sistem kini dioptimalkan untuk beban kerja tinggi dengan *asynchronous persistence* (I/O tidak lagi menghambat pengiriman) dan penggunaan **SQLite WAL Mode** untuk mencegah database locks.
-- **Aset Tersemat (Embedded)**: Dashboard web dikemas langsung ke dalam binari aplikasi menggunakan `go:embed`.
+- **Performa Skala Industri (v0.10.0 Upgrade)**:
+    - **O(1) Memory Iteration**: Menggunakan Go 1.23 Iterators untuk pemindaian antrean tanpa alokasi memori tambahan.
+    - **Event-Driven Dispatcher**: Sistem reaktif yang hanya aktif saat ada pesan baru atau jadwal retry, meminimalkan penggunaan CPU idle.
+    - **O(log N) Min-Heap Scheduler**: Penjadwalan retry yang sangat efisien untuk menangani ribuan pesan secara bersamaan.
+- **Observabilitas Total**:
+    - **Dashboard Real-time**: Visualisasi statistik antrean via WebSocket & RxJS.
+    - **Prometheus Metrics**: Endpoint `/metrics` siap pakai untuk monitoring profesional.
+    - **Runtime Profiling**: Dukungan `pprof` di `/debug/pprof/` untuk analisis performa mendalam.
+- **Dukungan Multi-Protokol**: gRPC, REST, dan WebSocket (Monitoring).
+- **Dukungan Payload JSON Dinamis**: Menangani objek JSON bersarang secara orisinal menggunakan Go Generics (`any`).
+- **Pengiriman Otomatis (Dispatcher) & Headers**: Pengiriman ke target eksternal dengan *Custom Headers* dan logika *Header Merging*.
+- **Strategi Exponential Backoff**: Retry yang adaptif untuk pengiriman yang gagal.
+- **Persistensi Data (Outbox Pattern)**: Menjamin durabilitas dengan simpan-ke-disk sebelum memori.
+- **Stabilitas & Hardening**: Dioptimalkan dengan *asynchronous persistence* dan **SQLite WAL Mode**.
 
-## Roadmap Stabilitas (v0.9.1 Breakthrough)
+## Roadmap Stabilitas & Performa
 
-Sistem telah mencapai kematangan penuh dengan status **20/20 Scenarios Passed**:
-- **Zero-Block Dispatcher**: Logika persistensi dipindahkan ke luar *critical lock path*, sehingga pengiriman pesan tidak lagi terhambat oleh kecepatan penulisan disk.
-- **WebSocket Dashboard Fix**: Menjamin sinkronisasi data target yang presisi dengan standarisasi tag JSON pada konfigurasi.
-- **Thread-Safe Testing**: Suite pengujian kini menggunakan isolasi servis untuk mencegah *race conditions* selama verifikasi asinkron, memastikan stabilitas gRPC delivery 100%.
+Sistem telah mencapai standar produksi:
+- **v0.10.0 (Performance Milestone)**: Optimasi CPU/Memori dan integrasi metrik industri.
+- **v0.9.1 (Stability Milestone)**: Status **20/20 Scenarios Passed** dengan isolasi servis dan pengujian thread-safe.
 
-## Struktur Proyek Terbaru
+## Struktur Proyek
 
 - `api/proto/`: Kontrak gRPC (Protocol Buffers).
 - `config/`: Manajemen konfigurasi sistem (YAML).
-- `models/`: Definisi model data deklaratif.
-- `pkg/broker/`: Logika inti antrean, pengelolaan persistensi JSON, serta *dispatcher* untuk mengirim pesan secara eksponensial.
-- `pkg/circuitbreaker/`: Implementasi proteksi sistem *thread-safe*.
-- `pkg/server/`: Handler multi-protokol (gRPC, HTTP, WebSocket) dan Dashboard.
-- `features/`: Pengujian E2E (End-to-End) menggunakan Godog terhadap objek binari.
-- `tests/`: Pengujian unit dan integrasi gRPC.
+- `pkg/broker/`: Logika inti antrean, heap retry, dan dispatcher reaktif.
+- `pkg/server/`: Handler multi-protokol (gRPC, HTTP, WebSocket) dan endpoint observabilitas.
+- `features/`: Pengujian E2E (End-to-End) menggunakan Godog.
 
 ## Cara Menjalankan
 
@@ -41,52 +39,28 @@ Sistem telah mencapai kematangan penuh dengan status **20/20 Scenarios Passed**:
    ```bash
    go run main.go
    ```
-2. **Akses Dashboard**:
-   Buka browser dan navigasi ke `http://localhost:8081` (sesuai konfigurasi).
-3. **Pengujian E2E (Godog)**:
-   Aplikasi harus dikompilasi menjadi `mbg.exe` agar dapat diverifikasi secara penuh:
-   ```bash
-   go build -o mbg.exe .
-   cd features/
-   go test -v .
-   ```
+2. **Akses Dashboard**: `http://localhost:8081`
+3. **Cek Metrik**: `http://localhost:8081/metrics`
+4. **Profiling**: `http://localhost:8081/debug/pprof/`
 
 ## API Endpoints
 
 ### REST API
-- `POST /api/messages`: Menambahkan pesan ke antrean. Mendukung field opsional `headers` (object) untuk metadata atau otorisasi.
-- `GET /api/messages`: Mengambil (Pop) pesan tertua.
-- `GET /api/stats`: Melihat statistik ukuran antrean saat ini.
-- `POST /api/targets`: Mendaftarkan target baru. Mendukung field opsional `headers` (map string to string) untuk default headers.
+- `POST /api/messages`: Menambahkan pesan.
+- `GET /api/messages`: Ambil (Pop) pesan.
+- `GET /api/stats`: Statistik dasar.
+- **Observabilitas**:
+    - `GET /metrics`: Metrik format Prometheus.
+    - `GET /debug/pprof/`: Index profiling Go.
 
 ### WebSocket
-- `/ws`: Khusus untuk mensuplai data ke **MBG Dashboard** secara *real-time*. Jalur ini tidak digunakan untuk pengiriman pesan dari luar (internal monitoring only).
+- `/ws`: Streaming data real-time ke Dashboard.
 
 ### gRPC Service
-- `BrokerService.Push`: Mengirim pesan.
-- `BrokerService.Pop`: Mengambil pesan.
+- `BrokerService.Push` / `BrokerService.Pop`
 
 ## Simulasi Asynchronous Request-Reply (X-Y-X)
 
-MBG mendukung simulasi di mana Service X mengirim tugas kepada Service Y dan menerima balasan secara otomatis melalui Broker.
-
-1.  **Siapkan Target Mock**:
-    Jalankan server target yang menyamar menjadi Service X dan Service Y:
-    ```bash
-    go run tests/target_mock/main.go
-    ```
-2.  **Kirim Tugas dari Service X**:
-    Kirim payload ke MBG (`8081`) dengan menyertakan `reply_to` yang merujuk pada target callback:
-    ```json
-    {
-      "id": "TASK-001",
-      "target": "worker-service",
-      "payload": {
-        "task": "render-video",
-        "reply_to": "callback-service"
-      }
-    }
-    ```
-3.  **Pantau Log**:
-    - **Worker Y** (Port 9090) akan menerima tugas.
-    - Setelah jeda pemrosesan, **Service X** (Port 9091) akan menerima pesan konfirmasi "COMPLETED" dari MBG.
+1.  **Siapkan Target**: `go run tests/target_mock/main.go`
+2.  **Kirim Tugas**: Kirim ke port `8081` dengan field `reply_to`.
+3.  **Pantau Log**: Lihat bagaimana Worker Y menerima tugas dan Service X menerima callback otomatis.

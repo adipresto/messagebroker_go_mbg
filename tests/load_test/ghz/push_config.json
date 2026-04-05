@@ -1,0 +1,13 @@
+{
+  "proto": "proto/proto/broker.proto",
+  "call": "broker.BrokerService/Push",
+  "host": "localhost:50051",
+  "insecure": true,
+  "total": 1000,
+  "concurrency": 50,
+  "data": {
+    "id": "GHZ-MSG-{{.RequestNumber}}",
+    "payload": "{\"message\": \"Load test from ghz\", \"index\": {{.RequestNumber}}}",
+    "headers": "{\"X-Load-Test\": \"true\"}"
+  }
+}

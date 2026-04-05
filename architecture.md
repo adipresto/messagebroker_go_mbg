@@ -1,6 +1,6 @@
-# Arsitektur Sistem Message Broker (MBS) - Lanjutan
+# Arsitektur Sistem Message Broker (MBS) - v0.10.0 Performance
 
-Sistem MBS kini memiliki kemampuan observabilitas yang lebih baik dan strategi pengujian yang komprehensif.
+Sistem MBS v0.10.0 kini memiliki kemampuan performa skala industri dan observabilitas mendalam.
 
 ## Diagram Arsitektur Komponen dan Pengujian
 
@@ -16,6 +16,8 @@ graph TD
         TestClient -- "gRPC Push/Pop" --> GRPC[gRPC Service Layer]
         TestClient -- "HTTP POST/GET/Stats" --> HTTP[HTTP API Layer]
         TestClient -- "WebSocket Stats" --> WS[WebSocket Handler]
+        TestClient -- "Pull Metrics" --> Prom[Prometheus Exporter]
+        TestClient -- "Profiling" --> Pprof[Pprof Debugger]
         
         WS -- "Internal Monitoring" --> Dashboard[MBG Dashboard]
         
@@ -24,50 +26,51 @@ graph TD
         
         subgraph "Broker Internal"
             Broker -- "Persist Asynchronously" --> Disk[Storage Layer / SQLite WAL]
-            Broker -- "Manage Memory" --> RAM[Memory Queue]
+            Broker -- "O1 Iterator Snapshot" --> RAM[Memory Queue]
             Broker -- "Propagate Update" --> Notify[Internal Pub/Sub]
             Broker -- "Triggers Delivery" --> Dispatcher[Dispatcher System]
         end
         
-        subgraph "External Delivery (v0.7.0)"
-            Dispatcher -- "Header Merging & Mapping" --> TargetHTTP[External HTTP Target]
-            Dispatcher -- "Metadata & Header Mapping" --> TargetGRPC[External gRPC Target]
-            Dispatcher -- "Exponential Backoff Update" --> Broker
+        subgraph "External Delivery (v0.10.0)"
+            Dispatcher -- "Olog N Min-Heap Sched" --> RetryHeap[Retry Manager]
+            RetryHeap -- "Event-Driven Wakeup" --> Worker[Worker Pool]
+            Worker -- "Header Merging" --> TargetHTTP[External HTTP Target]
+            Worker -- "Metadata Mapping" --> TargetGRPC[External gRPC Target]
+            Worker -- "Exponential Backoff Update" --> Broker
         end
 
         Notify -- "Broadcast Stats" --> WS
         Disk -- "Load on Startup" --> Broker
+        Broker -- "Expose Metrics" --> Prom
     end
 ```
 
-## Komponen Utama Baru (Lanjutan)
+## Komponen Utama Baru (v0.10.0 Performance)
 
-### 1. Strategi Pengujian E2E (v0.9.1 Breakthrough)
-Sistem ini telah mencapai stabilitas **100% (20/20 scenarios passed)** melalui strategi pengujian terhadap objek binari asli (`mbg.exe`) yang sangat terisolasi:
-- **Service Isolation (The Fix)**: Masalah *race conditions* dan *flakiness* pada gRPC diatasi dengan memberikan setiap mock server buffer pesan yang terisolasi dan dilindungi mutex.
-- **Verifikasi Protokol**: Pengujian secara sinkron terhadap gRPC, HTTP, dan WebSocket dengan asersi yang lebih presisi pada field `id` dan metadata.
-- **Isolasi Skenario**: Setiap skenario pengujian secara dinamis memulai dan mematikan proses `mbg.exe` untuk menjamin kebersihan state antar pengujian.
-- **Validasi Durabilitas**: Pengujian memverifikasi keberadaan data di SQLite/JSON untuk memastikan persistensi benar-benar terjadi tanpa menghambat aliran dispatcher (asynchronous).
+### 1. Optimasi Performa Skala Industri
+Sistem ini telah mencapai tingkat kematangan baru melalui efisiensi sumber daya yang ketat:
+- **O(1) Snapshot Iteration**: Menggunakan Go 1.23 Iterators untuk melakukan iterasi pada antrean tanpa melakukan alokasi slice memori baru, mencegah *memory spikes* pada beban kerja tinggi.
+- **Event-Driven Dispatcher**: Menghapus mekanisme polling berkala. Dispatcher kini hanya "bangun" saat ada pesan baru (`Push`) atau saat jadwal retry tepat waktu tiba (`Retry Timer`).
+- **O(log N) Min-Heap Scheduling**: Mengelola ribuan jadwal retry secara efisien menggunakan struktur data *Priority Queue* (Min-Heap), menjamin pencarian jadwal retry terdekat dalam waktu `O(1)` dan penyisipan dalam `O(log N)`.
 
-### 2. Dukungan JSON Dinamis (Go Generics)
-Implementasi inti `Broker[T any]` kini menggunakan tipe data `any` yang memungkinkan sistem untuk menerima, menyimpan, dan meneruskan payload JSON apa pun secara transparan. Handler gRPC dan HTTP melayani sebagai gerbang (*gateways*) yang melakukan unmarshaling/marshaling secara otomatis ke dalam model data `models.Message[any]`, menjamin fleksibilitas tingkat tinggi tanpa mengorbankan integritas model pesan.
+### 2. Full Observability (Prometheus & pprof)
+MBG v0.10.0 mendukung pemantauan standar industri:
+- **Prometheus Metrics**: Tersedia di `/metrics` untuk memantau throughput, latensi, dan ukuran antrean secara *real-time*.
+- **Runtime Profiling**: Endpoint `/debug/pprof/` untuk menganalisis CPU, memori, dan goroutine secara mendalam guna mendeteksi *bottleneck*.
 
-### 3. Kemampuan Observabilitas (Dashboard Only)
-Dasbor waktu nyata (MBG Dashboard) bukan hanya sekadar visualisasi, tetapi juga berfungsi sebagai titik verifikasi kesehatan sistem (*health check*) yang memantau metrik antrean secara kontinu melalui WebSockets. Jalur WebSocket (`/ws`) saat ini bersifat *read-only* dan didedikasikan sepenuhnya untuk operasional Dashboard.
+### 3. Strategi Pengujian E2E (v0.9.1 Breakthrough)
+Stabilitas **100% (20/20 scenarios passed)** tetap dipertahankan melalui:
+- **Service Isolation**: Setiap mock server memiliki buffer pesan terisolasi dan dilindungi mutex.
+- **Isolasi Skenario**: Siklus hidup binari `mbg.exe` dikelola secara dinamis untuk setiap skenario.
 
 ### 4. Automated Dispatch, Exponential Backoff & Header Support
-Sistem pengiriman sekarang secara otomatis memonitor seluruh pesan antrean yang siap untuk diteruskan (*ready to be dispatched*) menggunakan `Dispatcher` yang berjalan secara asynchronous:
-- Secara adaptif mengubah jarak waktu pengiriman ulang (*NextRetry*) berdasarkan kelipatan *Exponential Backoff* saat percobaan pertama gagal.
-- **Header Propagation**: Pengiriman pesan kini mendukung pengiriman metadata tambahan (sepertitoken otorisasi) melalui HTTP Headers dan gRPC Metadata. Sistem secara otomatis menyertakan `X-Message-ID` untuk pelacakan.
-- **Payload Refinement**: Khusus untuk target HTTP, sistem kini melakukan *decoupling* antara metadata broker dan data bisnis dengan hanya mengirim field `payload` di dalam request body.
-- **Header Merging Strategy**: Sistem menggabungkan *default headers* dari konfigurasi target dengan *dynamic headers* dari payload pesan, di mana header dari pesan memiliki prioritas tertinggi.
-- Integrasi mulus yang melindungi target maupun layanan melalui limitasi yang aman via *Circuit Breaker*.
+- **Header Propagation**: Mendukung token otorisasi via HTTP Headers dan gRPC Metadata.
+- **Payload Refinement**: Memisahkan metadata broker dari data bisnis (hanya mengirim `payload` di body).
+- **Header Merging Strategy**: Penggabungan *default headers* target dengan *dynamic headers* pesan.
 
 ## Pola Asynchronous Request-Reply (X-Y-X)
 
-Mulai v0.8.0, MBG secara formal mendukung (melalui simulasi) pola Request-Reply yang memungkinkan layanan untuk berinteraksi secara asinkron tanpa kehilangan kepastian hasil.
-
-### Alur Kerja Pesan:
+MBG secara formal mendukung pola Request-Reply asinkron:
 
 ```mermaid
 sequenceDiagram
@@ -84,16 +87,10 @@ sequenceDiagram
     MBG->>X: 6. Dispatch Result to Callback URL
 ```
 
-### Keuntungan Arsitektural:
-1.  **Decoupling**: Service X tidak perlu tahu alamat IP Service Y, dan sebaliknya. Mereka hanya perlu tahu nama target di MBG.
-2.  **Persistence**: Jika Service X mati saat Service Y sedang bekerja, MBG akan menyimpan hasil pekerjaan tersebut dan mencoba mengirimkannya kembali saat Service X hidup kembali (*Self-healing via Retry*).
-3.  **Scalability**: Worker Y bisa ditambah sesuka hati (horizontal scaling) tanpa mengganggu logika pengiriman balik ke X.
-
 ---
 
-## Mekanisme Keamanan & Ketahanan (Lanjutan)
+## Mekanisme Keamanan & Ketahanan (Hardening)
 
-- **Zero-Block Dispatcher**: Logika pengiriman (dispatching) dipisahkan dari I/O persistensi. Dispatcher hanya mengambil data dari memori dan mengirimkannya, sementara proses penulisan ke disk dilakukan secara asinkron untuk menghilangkan *stalling*.
-- **SQLite WAL (Write-Ahead Logging)**: Penggunaan mode WAL menjamin bahwa penulisan data oleh broker tidak menghambat pembacaan data statistik untuk dashboard, meningkatkan stabilitas di bawah beban tinggi.
-- **Manajemen Proses**: Penggunaan utilitas sistem (seperti `taskkill` pada Windows) selama pengujian untuk mengelola siklus hidup aplikasi secara otomatis.
-- **Health Check Integration**: Setiap klien (termasuk unit pengujian) kini melakukan pengecekan kesehatan melalui `/api/health` sebelum memulai transaksi, meningkatkan ketersediaan layanan.
+- **Zero-Block Dispatcher**: Logika pengiriman dipisahkan dari I/O persistensi guna menghilangkan *lag* pengiriman.
+- **SQLite WAL (Write-Ahead Logging)**: Menjamin konkurensi throughput pembacaan metrik dan penulisan pesan.
+- **Circuit Breaker Integration**: Melindungi sistem dari target yang *unresponsive* melalui mekanisme proteksi asinkron.
