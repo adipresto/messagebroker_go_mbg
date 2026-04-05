@@ -94,3 +94,4 @@ sequenceDiagram
 - **Zero-Block Dispatcher**: Logika pengiriman dipisahkan dari I/O persistensi guna menghilangkan *lag* pengiriman.
 - **SQLite WAL (Write-Ahead Logging)**: Menjamin konkurensi throughput pembacaan metrik dan penulisan pesan.
 - **Circuit Breaker Integration**: Melindungi sistem dari target yang *unresponsive* melalui mekanisme proteksi asinkron.
+- **Planned: Gatekeeper Layer (v0.11.0)**: Penambahan middleware untuk API Key validation, Rate Limiting, dan SSRF protection guna mengamankan broker saat diakses dari endpoint publik.

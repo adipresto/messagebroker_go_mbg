@@ -16,14 +16,14 @@ Message Broker yang tangguh, modern, dan berperforma tinggi berbasis Go. Diranca
 - **Dukungan Payload JSON Dinamis**: Menangani objek JSON bersarang secara orisinal menggunakan Go Generics (`any`).
 - **Pengiriman Otomatis (Dispatcher) & Headers**: Pengiriman ke target eksternal dengan *Custom Headers* dan logika *Header Merging*.
 - **Strategi Exponential Backoff**: Retry yang adaptif untuk pengiriman yang gagal.
-- **Persistensi Data (Outbox Pattern)**: Menjamin durabilitas dengan simpan-ke-disk sebelum memori.
+- **DLQ (Dead Letter Queue)**: Penanganan pesan gagal kirim secara otomatis untuk mempermudah audit.
 - **Stabilitas & Hardening**: Dioptimalkan dengan *asynchronous persistence* dan **SQLite WAL Mode**.
 
-## Roadmap Stabilitas & Performa
-
-Sistem telah mencapai standar produksi:
-- **v0.10.0 (Performance Milestone)**: Optimasi CPU/Memori dan integrasi metrik industri.
-- **v0.9.1 (Stability Milestone)**: Status **20/20 Scenarios Passed** dengan isolasi servis dan pengujian thread-safe.
+## Roadmap Pengembangan
+Sistem MBG terus berevolusi untuk mencapai standar produksi yang lebih aman:
+- **v0.11.0 (Gatekeeper Layer)**: Fokus ke Security (Auth, Rate Limiting, SSRF Protection, JSON Validation).
+- **v0.10.0 (Performance Milestone)**: Optimasi CPU/Memori skala industri dan integrasi metrik Prometheus/pprof.
+- **v0.9.1 (Stability Milestone)**: Status **20/20 Scenarios Pass** dengan isolasi servis dan pengujian thread-safe.
 
 ## Struktur Proyek
 

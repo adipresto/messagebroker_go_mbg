@@ -16,6 +16,7 @@ Semua perubahan signifikan pada proyek **Message Broker Sendiri (MBS) akan dicat
 
 ### Performance
 - **Zero-Copy Queue Snapshots**: Menghilangkan alokasi slice baru saat melakukan broadcast status ke dashboard atau audit eksternal.
+- **Addressing Issue #1**: Rilis ini secara resmi menutup beberapa kelemahan teknis yang diidentifikasi di [Issue #1](https://github.com/adipresto/messagebroker_go_mbg/issues/1), termasuk optimasi I/O, penanganan OOM, dan implementasi DLQ.
 
 ## [0.9.1] - 2026-04-03
 
