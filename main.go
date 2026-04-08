@@ -60,6 +60,7 @@ func main() {
 	)
 
 	b := broker.NewBroker[any](cfg.Broker.StoragePath, cfg.Broker.DeadLetterPath, storageCB)
+	b.SetConfig(cfg.Broker.MaxQueueSize, cfg.Broker.AckTimeoutSeconds)
 
 	// 3. Setup Dispatcher (Active Delivery)
 	disp := broker.NewDispatcher[any](b, cfg, networkCB, targetStorage)
@@ -87,7 +88,7 @@ func main() {
 	}()
 
 	// 5. Start HTTP & Dashboard Server
-	httpServer := server.NewHTTPServer(b, disp)
+	httpServer := server.NewHTTPServer(b, disp, cfg)
 
 	// Start WebSocket streaming loop in background
 	go httpServer.StartStreaming()

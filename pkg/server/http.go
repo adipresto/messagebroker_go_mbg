@@ -8,12 +8,15 @@ import (
 	"mbg/config"
 	"mbg/pkg/models"
 	"mbg/pkg/broker"
+	"net"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"golang.org/x/time/rate"
 	"net/http/pprof"
 )
 
@@ -29,13 +32,38 @@ type HTTPServer struct {
 	dispatcher *broker.Dispatcher[any]
 	mu         sync.Mutex
 	conns      map[*websocket.Conn]bool
+
+	limiter        *rate.Limiter
+	maxPayloadSize int64
+	allowedDomains []string
 }
 
-func NewHTTPServer(b *broker.Broker[any], d *broker.Dispatcher[any]) *HTTPServer {
+func NewHTTPServer(b *broker.Broker[any], d *broker.Dispatcher[any], cfg *config.Config) *HTTPServer {
+	var limiter *rate.Limiter
+	if cfg != nil && cfg.Gatekeeper.RateLimitRPS > 0 {
+		burst := cfg.Gatekeeper.RateLimitBurst
+		if burst == 0 {
+			burst = int(cfg.Gatekeeper.RateLimitRPS) // default burst
+		}
+		limiter = rate.NewLimiter(rate.Limit(cfg.Gatekeeper.RateLimitRPS), burst)
+	}
+
+	var maxPayload int64 = 1024 * 1024 // default 1MB
+	var domains []string
+	if cfg != nil {
+		if cfg.Gatekeeper.MaxPayloadSize > 0 {
+			maxPayload = cfg.Gatekeeper.MaxPayloadSize
+		}
+		domains = cfg.Gatekeeper.AllowedDomains
+	}
+
 	return &HTTPServer{
-		broker:     b,
-		dispatcher: d,
-		conns:      make(map[*websocket.Conn]bool),
+		broker:         b,
+		dispatcher:     d,
+		conns:          make(map[*websocket.Conn]bool),
+		limiter:        limiter,
+		maxPayloadSize: maxPayload,
+		allowedDomains: domains,
 	}
 }
 
@@ -134,6 +162,8 @@ func (s *HTTPServer) Handler() http.Handler {
 	// REST API
 	mux.HandleFunc("POST /api/messages", s.handlePush)
 	mux.HandleFunc("GET /api/messages", s.handlePop)
+	mux.HandleFunc("POST /api/messages/ack", s.handleAck)
+	mux.HandleFunc("POST /api/messages/nack", s.handleNack)
 	mux.HandleFunc("GET /api/messages/all", s.handleAll)
 	mux.HandleFunc("GET /api/stats", s.handleStats)
 	mux.HandleFunc("GET /api/health", s.handleHealth)
@@ -162,6 +192,14 @@ func (s *HTTPServer) Handler() http.Handler {
 }
 
 func (s *HTTPServer) handlePush(w http.ResponseWriter, r *http.Request) {
+	if s.limiter != nil && !s.limiter.Allow() {
+		http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
+		return
+	}
+
+	// Payload Size Limit (Gatekeeper)
+	r.Body = http.MaxBytesReader(w, r.Body, s.maxPayloadSize)
+
 	var msg models.Message[any]
 	if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -185,6 +223,40 @@ func (s *HTTPServer) handlePop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	json.NewEncoder(w).Encode(msg)
+}
+
+func (s *HTTPServer) handleAck(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	
+	if err := s.broker.Acknowledge(body.ID); err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "acknowledged"})
+}
+
+func (s *HTTPServer) handleNack(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	
+	if err := s.broker.NegativeAcknowledge(body.ID); err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "nacked"})
 }
 
 func (s *HTTPServer) handleAll(w http.ResponseWriter, r *http.Request) {
@@ -259,6 +331,66 @@ func (s *HTTPServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("OK"))
 }
 
+func isPrivateIP(ip net.IP) bool {
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		return true
+	}
+	
+	// Check RFC 1918 ranges
+	privateIPBlocks := []*net.IPNet{
+		{IP: net.ParseIP("10.0.0.0"), Mask: net.CIDRMask(8, 32)},
+		{IP: net.ParseIP("172.16.0.0"), Mask: net.CIDRMask(12, 32)},
+		{IP: net.ParseIP("192.168.0.0"), Mask: net.CIDRMask(16, 32)},
+	}
+
+	for _, block := range privateIPBlocks {
+		if block.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func isLocalhostAllowed(host string, allowed []string) bool {
+	for _, d := range allowed {
+		if d == "localhost" || d == "127.0.0.1" {
+			if host == d { return true }
+		}
+	}
+	return false
+}
+
+func (s *HTTPServer) handleTestConfigGatekeeper(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		RateLimitRPS   float64  `json:"rate_limit_rps"`
+		MaxPayloadSize int64    `json:"max_payload_size"`
+		AllowedDomains []string `json:"allowed_domains"`
+		MaxQueueSize   int      `json:"max_queue_size"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if body.RateLimitRPS > 0 {
+		s.limiter = rate.NewLimiter(rate.Limit(body.RateLimitRPS), int(body.RateLimitRPS))
+	} else {
+		s.limiter = nil
+	}
+	
+	if body.MaxPayloadSize > 0 {
+		s.maxPayloadSize = body.MaxPayloadSize
+	}
+	
+	s.allowedDomains = body.AllowedDomains
+	
+	if body.MaxQueueSize > 0 {
+		s.broker.SetConfig(body.MaxQueueSize, 0) // Update queue size only
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
 func (s *HTTPServer) handleRegisterTarget(w http.ResponseWriter, r *http.Request) {
 	log.Printf(" [HTTP] Incoming request: POST /api/targets")
 	var body config.TargetConfig
@@ -272,6 +404,41 @@ func (s *HTTPServer) handleRegisterTarget(w http.ResponseWriter, r *http.Request
 		log.Printf(" [HTTP] Validation failed: name and url required")
 		http.Error(w, "name and url are required", http.StatusBadRequest)
 		return
+	}
+
+	// Gatekeeper: SSRF Protection
+	if len(s.allowedDomains) > 0 {
+		parsedURL, err := url.Parse(body.URL)
+		if err != nil {
+			http.Error(w, "invalid URL format", http.StatusBadRequest)
+			return
+		}
+		
+		host := parsedURL.Hostname()
+		
+		// 1. Block Private IPs directly
+		if ip := net.ParseIP(host); ip != nil {
+			if isPrivateIP(ip) && !isLocalhostAllowed(host, s.allowedDomains) {
+				log.Printf(" [HTTP] SSRF trigger: Private IP %s rejected", host)
+				http.Error(w, "private IP addresses not allowed", http.StatusForbidden)
+				return
+			}
+		}
+
+		// 2. Check Domain Allow-list
+		allowed := false
+		for _, domain := range s.allowedDomains {
+			if host == domain {
+				allowed = true
+				break
+			}
+		}
+		
+		if !allowed {
+			log.Printf(" [HTTP] SSRF trigger: %s not in allowed_domains", host)
+			http.Error(w, "target domain not allowed by policy", http.StatusForbidden)
+			return
+		}
 	}
 
 	if s.dispatcher != nil {

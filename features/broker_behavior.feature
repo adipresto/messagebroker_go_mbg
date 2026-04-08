@@ -16,6 +16,7 @@ Feature: Message Broker Reliability and Persistence
     And the message should be available in the memory queue
     And when a consumer pops a message
     Then the consumer should receive message "TX-001"
+    And the consumer acknowledges message "TX-001"
     And the file "./data/messages/TX-001.json" should be deleted
 
   Scenario: Circuit Breaker - Failure Threshold Reached
@@ -46,6 +47,7 @@ Feature: Message Broker Reliability and Persistence
     Then the message "GRPC-001" should be stored in "../data/messages/GRPC-001.json"
     And when the consumer requests a message via gRPC
     Then the consumer should receive message "GRPC-001" via gRPC
+    And the consumer acknowledges message "GRPC-001" via gRPC
 
   Scenario: Happy Path - HTTP REST API
     When the producer sends message "HTTP-001" with payload "Hello HTTP" via POST "/api/messages"
@@ -53,6 +55,7 @@ Feature: Message Broker Reliability and Persistence
     And the message "HTTP-001" should be stored in "../data/messages/HTTP-001.json"
     When the consumer requests a message via GET "/api/messages"
     Then the consumer should receive message "HTTP-001" via HTTP
+    And the consumer acknowledges message "HTTP-001" via POST "/api/messages/ack"
 
   Scenario: Structured Payload - JSON Handling
     When the producer sends the following JSON payload via gRPC:
@@ -68,6 +71,7 @@ Feature: Message Broker Reliability and Persistence
     Then the message "JSON-001" should be stored in "../data/messages/JSON-001.json"
     And when the consumer requests a message via gRPC
     Then the consumer should receive message "JSON-001" via gRPC
+    And the consumer acknowledges message "JSON-001" via gRPC
 
   Scenario: Structured Payload - JSON Handling via HTTP
     When the producer sends the following JSON payload via POST "/api/messages":
@@ -84,6 +88,7 @@ Feature: Message Broker Reliability and Persistence
     And the message "JSON-HTTP-001" should be stored in "../data/messages/JSON-HTTP-001.json"
     When the consumer requests a message via GET "/api/messages"
     Then the consumer should receive message "JSON-HTTP-001" via HTTP
+    And the consumer acknowledges message "JSON-HTTP-001" via POST "/api/messages/ack"
 
   Scenario: Dashboard - Real-time Visualization
     Given the dashboard is accessible
@@ -136,3 +141,27 @@ Feature: Message Broker Reliability and Persistence
     Then the mock server should receive message "SELECT-001"
     And the mock server at "http://localhost:9591/fail" should NOT receive message "SELECT-001"
     And the message "SELECT-001" should eventually be deleted from the queue
+
+  Scenario: Gatekeeper - Rate Limiting
+    Given the configuration has rate limit set to 1 RPS with burst 1
+    When 5 messages are pushed rapidly via POST "/api/messages"
+    Then at least one request should fail with status 429
+
+  Scenario: Gatekeeper - Max Payload Size
+    Given the configuration has max payload size set to 1024 bytes
+    When a message with payload size 2048 bytes is pushed via POST "/api/messages"
+    Then the server should respond with status 413
+
+  Scenario: Gatekeeper - SSRF Protection
+    Given the configuration has allowed domains set to ["webhook.site"]
+    When a target is registered with URL "http://malicious-internal.local/webhook"
+    Then the server should respond with status 403
+    And the registration should be rejected
+
+  Scenario: Stability - Max Queue Size (OOM Protection)
+    Given the configuration has max queue size set to 2
+    And the broker is initialized with an empty queue
+    When 2 messages are pushed "MSG-1" and "MSG-2"
+    And a third message "MSG-3" is pushed
+    Then the third push "MSG-3" should fail with "queue is full" error
+

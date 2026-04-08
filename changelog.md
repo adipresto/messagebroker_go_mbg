@@ -2,6 +2,14 @@
 
 Semua perubahan signifikan pada proyek **Message Broker Sendiri (MBS) akan dicatat di file ini. Log ini mengikuti format [Keep a Changelog](https://keepachangelog.com/id/1.1.0/).
 
+## [Unreleased] (v0.11.0 Target)
+
+### Planned
+- **Keamanan (Gatekeeper Layer)**: Implementasi *Rate Limiting*, proteksi ukuran maksimum *Payload* JSON, dan *Domain Allow-list* (perlindungan dari SSRF).
+- **Keandalan Data (Missing ACK Mitigation)**: Mekanisme kunci pesan ketika *Pull* (`Pop`) dan penghapusan fisik dilakukan hanya saat diterimanya *Acknowledge* (ACK) dari *consumer*.
+- **Proteksi Memori**: Mengimplementasikan buffer berbatas tetap (*Fixed-Size Limit*) guna menyediakan proteksi OOM (Out Of Memory) absolut pada *Queue*.
+- **Transisi Cache Database**: Pemindahan metode *file per message* ke layer DB Key-Value (BadgerDB).
+
 ## [0.10.0] - 2026-04-06
 
 ### Added

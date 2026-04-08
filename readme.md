@@ -20,8 +20,11 @@ Message Broker yang tangguh, modern, dan berperforma tinggi berbasis Go. Diranca
 - **Stabilitas & Hardening**: Dioptimalkan dengan *asynchronous persistence* dan **SQLite WAL Mode**.
 
 ## Roadmap Pengembangan
-Sistem MBG terus berevolusi untuk mencapai standar produksi yang lebih aman:
-- **v0.11.0 (Gatekeeper Layer)**: Fokus ke Security (Auth, Rate Limiting, SSRF Protection, JSON Validation).
+Sistem MBG terus berevolusi untuk mencapai standar produksi yang lebih aman dan tangguh:
+- **v0.11.0 (Gatekeeper & Reliability Layer)**: 
+  - **Security**: Tambahan Rate Limiting, perlindungan SSRF (Domain Allow-list), dan batasan ukuran Payload (Gatekeeper).
+  - **Reliability**: Implementasi mekanisme Konfirmasi (ACK/NACK) pada operasi `Pop` untuk memastikan pesan tidak hilang jika *consumer* terputus.
+  - **Stability**: Batas keras ukuran antrean (*Fixed-Size Buffer / Max Queue Size*) guna proteksi penuh dari resiko OOM.
 - **v0.10.0 (Performance Milestone)**: Optimasi CPU/Memori skala industri dan integrasi metrik Prometheus/pprof.
 - **v0.9.1 (Stability Milestone)**: Status **20/20 Scenarios Pass** dengan isolasi servis dan pengujian thread-safe.
 

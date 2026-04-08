@@ -13,15 +13,23 @@ import (
 	"time"
 )
 
+type PendingMessage[T any] struct {
+	Message models.Message[T]
+	PopTime time.Time
+}
+
 type Broker[T any] struct {
 	mu             sync.RWMutex
 	messages       []models.Message[T]
+	pendingAcks    map[string]PendingMessage[T]
 	storagePath    string
 	deadLetterPath string
 	listeners      []chan struct{}
 	msgListeners   []chan models.Message[T]
 	cb             *circuitbreaker.CircuitBreaker
 	dlqSize        int
+	maxQueueSize   int
+	ackTimeout     time.Duration
 }
 
 func NewBroker[T any](storagePath string, deadLetterPath string, cb *circuitbreaker.CircuitBreaker) *Broker[T] {
@@ -31,16 +39,30 @@ func NewBroker[T any](storagePath string, deadLetterPath string, cb *circuitbrea
 
 	b := &Broker[T]{
 		messages:       make([]models.Message[T], 0),
+		pendingAcks:    make(map[string]PendingMessage[T]),
 		storagePath:    storagePath,
 		deadLetterPath: deadLetterPath,
 		listeners:      make([]chan struct{}, 0),
 		msgListeners:   make([]chan models.Message[T], 0),
 		cb:             cb,
+		ackTimeout:     5 * time.Minute, // Default
 	}
 
 	// Load existing messages from disk on startup (Outbox Recovery)
 	b.Recover()
+
+	// Start background timeout checker for un-acked messages
+	go b.startTimeoutChecker()
 	return b
+}
+
+func (b *Broker[T]) SetConfig(maxQueueSize int, ackTimeoutSeconds int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.maxQueueSize = maxQueueSize
+	if ackTimeoutSeconds > 0 {
+		b.ackTimeout = time.Duration(ackTimeoutSeconds) * time.Second
+	}
 }
 
 // saveToDisk menyimpan pesan sebagai file JSON (Persistence)
@@ -126,12 +148,20 @@ func (b *Broker[T]) Push(msg models.Message[T]) error {
 }
 
 func (b *Broker[T]) doPush(msg models.Message[T]) error {
-	// 1. Simpan ke disk dulu
+	// 1. Validasi MaxQueueSize jika dikonfigurasi
+	b.mu.Lock()
+	if b.maxQueueSize > 0 && len(b.messages) >= b.maxQueueSize {
+		b.mu.Unlock()
+		return fmt.Errorf("queue is full (max size: %d), message rejected", b.maxQueueSize)
+	}
+	b.mu.Unlock()
+
+	// 2. Simpan ke disk dulu
 	if err := b.SaveToDisk(msg); err != nil {
 		return fmt.Errorf("failed to persist message: %w", err)
 	}
 
-	// 2. Tambahkan ke memori
+	// 3. Tambahkan ke memori utama
 	b.mu.Lock()
 	b.messages = append(b.messages, msg)
 	qSize := len(b.messages)
@@ -156,29 +186,29 @@ func (b *Broker[T]) broadcast(msg models.Message[T]) {
 	}
 }
 
-// Pop mengambil pesan, dan menghapusnya dari disk (Commit)
+// Pop mengambil pesan dari memori dan memindahkannya ke pendingAcks (peminjaman)
 func (b *Broker[T]) Pop() (models.Message[T], error) {
 	b.mu.Lock()
 	if len(b.messages) == 0 {
 		b.mu.Unlock()
 		var zero models.Message[T]
-		return zero, fmt.Errorf("queue_size is zero")
+		return zero, fmt.Errorf("queue is empty")
 	}
 
 	msg := b.messages[0]
 	b.messages = b.messages[1:]
+	
+	// Pindahkan ke status Pending
+	b.pendingAcks[msg.ID] = PendingMessage[T]{
+		Message: msg,
+		PopTime: time.Now(),
+	}
+	
 	qSize := len(b.messages)
 	b.mu.Unlock()
 
 	telemetry.QueueSize.Set(float64(qSize))
-	// Notify after unlock
 	b.notify()
-
-	// Remove from disk AFTER memory update and unlock (latency reduction)
-	if err := b.RemoveFromDisk(msg.ID); err != nil {
-		return msg, fmt.Errorf("failed to remove from persistence: %w", err)
-	}
-
 	return msg, nil
 }
 
@@ -254,38 +284,85 @@ func (b *Broker[T]) MoveToDLQ(id string) error {
 	return nil
 }
 
-// Acknowledge menghapus pesan berdasarkan ID (Commit)
+// Acknowledge menghapus pesan berdasarkan ID secara definitif
 func (b *Broker[T]) Acknowledge(id string) error {
 	b.mu.Lock()
-	index := -1
-	for i, m := range b.messages {
-		if m.ID == id {
-			index = i
-			break
+	_, exists := b.pendingAcks[id]
+	if !exists {
+		
+		// Fallback check: may not be popped yet or already deleted
+		index := -1
+		for i, m := range b.messages {
+			if m.ID == id {
+				index = i
+				break
+			}
 		}
-	}
 
-	if index == -1 {
-		b.mu.Unlock()
-		return fmt.Errorf("message %s not found in memory (already popped or sent?)", id)
-	}
-
-	// Remove ALL instances from memory
-	newMessages := make([]models.Message[T], 0, len(b.messages))
-	for _, m := range b.messages {
-		if m.ID != id {
-			newMessages = append(newMessages, m)
+		if index == -1 {
+			b.mu.Unlock()
+			return fmt.Errorf("message %s not found in pending nor queue", id)
 		}
+
+		newMessages := make([]models.Message[T], 0, len(b.messages))
+		for _, m := range b.messages {
+			if m.ID != id {
+				newMessages = append(newMessages, m)
+			}
+		}
+		b.messages = newMessages
+	} else {
+		delete(b.pendingAcks, id)
 	}
-	b.messages = newMessages
 	qSize := len(b.messages)
 	b.mu.Unlock()
 
 	telemetry.QueueSize.Set(float64(qSize))
 	b.notify()
 
-	// Remove from disk outside lock
+	// Hapus fisik dari disk
 	return b.RemoveFromDisk(id)
+}
+
+// NegativeAcknowledge mengembalikan pesan dari pending ke antrean utama
+func (b *Broker[T]) NegativeAcknowledge(id string) error {
+	b.mu.Lock()
+	pendingMsg, exists := b.pendingAcks[id]
+	if !exists {
+		b.mu.Unlock()
+		return fmt.Errorf("message %s not found in pending acks", id)
+	}
+
+	delete(b.pendingAcks, id)
+	
+	// Prepend atau Append (bergantung prioritas, untuk kesederhanaan di belakang)
+	b.messages = append([]models.Message[T]{pendingMsg.Message}, b.messages...)
+	qSize := len(b.messages)
+	b.mu.Unlock()
+
+	telemetry.QueueSize.Set(float64(qSize))
+	b.notify()
+	return nil
+}
+
+// startTimeoutChecker loop daemon untuk mengecek pending acks yang kadaluarsa
+func (b *Broker[T]) startTimeoutChecker() {
+	ticker := time.NewTicker(30 * time.Second)
+	for range ticker.C {
+		b.mu.Lock()
+		now := time.Now()
+		for id, pending := range b.pendingAcks {
+			if now.Sub(pending.PopTime) > b.ackTimeout {
+				delete(b.pendingAcks, id)
+				b.messages = append([]models.Message[T]{pending.Message}, b.messages...)
+				fmt.Printf("[ACK Timeout] Message %s re-queued\n", id)
+			}
+		}
+		qSize := len(b.messages)
+		b.mu.Unlock()
+		telemetry.QueueSize.Set(float64(qSize))
+		b.notify()
+	}
 }
 
 // Update memperbarui isi pesan di memori dan disk (misal untuk retry count)

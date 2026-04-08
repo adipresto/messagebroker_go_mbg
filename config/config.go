@@ -14,6 +14,8 @@ type Config struct {
 		GRPCPort       int    `yaml:"grpc_port"`
 		StoragePath    string `yaml:"storage_path"`
 		DeadLetterPath string `yaml:"dead_letter_path"`
+		MaxQueueSize      int    `yaml:"max_queue_size"`
+		AckTimeoutSeconds int    `yaml:"ack_timeout_seconds"`
 	} `yaml:"broker"`
 	CircuitBreaker struct {
 		Threshold      int `yaml:"threshold"`
@@ -25,6 +27,12 @@ type Config struct {
 		BaseInterval   int            `yaml:"base_interval_seconds"`
 		WorkerCount    int            `yaml:"worker_count"`
 	} `yaml:"dispatcher"`
+	Gatekeeper struct {
+		RateLimitRPS   float64  `yaml:"rate_limit_rps"`
+		RateLimitBurst int      `yaml:"rate_limit_burst"`
+		MaxPayloadSize int64    `yaml:"max_payload_size"`
+		AllowedDomains []string `yaml:"allowed_domains"`
+	} `yaml:"gatekeeper"`
 }
 
 type TargetConfig struct {

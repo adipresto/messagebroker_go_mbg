@@ -57,3 +57,17 @@ func (s *GRPCServer) Pop(ctx context.Context, req *proto.PopRequest) (*proto.Pop
 		CreatedAt: msg.CreatedAt,
 	}, nil
 }
+
+func (s *GRPCServer) Ack(ctx context.Context, req *proto.AckRequest) (*proto.AckResponse, error) {
+	if err := s.broker.Acknowledge(req.Id); err != nil {
+		return &proto.AckResponse{Success: false}, nil
+	}
+	return &proto.AckResponse{Success: true}, nil
+}
+
+func (s *GRPCServer) Nack(ctx context.Context, req *proto.NackRequest) (*proto.NackResponse, error) {
+	if err := s.broker.NegativeAcknowledge(req.Id); err != nil {
+		return &proto.NackResponse{Success: false}, nil
+	}
+	return &proto.NackResponse{Success: true}, nil
+}

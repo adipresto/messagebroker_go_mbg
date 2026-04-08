@@ -1413,6 +1413,191 @@ func (c *testContext) theDashboardShouldReceiveAWebSocketMessageContainingTheNew
 	}
 }
 
+func (c *testContext) theConsumerAcknowledgesMessage(id string) error {
+	return c.theConsumerAcknowledgesMessageViaPOST(id, "/api/messages/ack")
+}
+
+func (c *testContext) theConsumerAcknowledgesMessageViaGRPC(id string) error {
+	resp, err := c.grpcClient.Ack(context.Background(), &proto.AckRequest{Id: id})
+	if err != nil {
+		return err
+	}
+	if !resp.Success {
+		return fmt.Errorf("gRPC ACK failed")
+	}
+	return nil
+}
+
+func (c *testContext) theConsumerAcknowledgesMessageViaPOST(id, path string) error {
+	body := map[string]string{"id": id}
+	data, _ := json.Marshal(body)
+	url := fmt.Sprintf("%s%s", c.httpBaseURL, path)
+	resp, err := c.httpClient.Post(url, "application/json", bytes.NewBuffer(data))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("ACK failed with status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func (c *testContext) theConfigurationHasRateLimitSetToRPSWithBurst(rps, burst int) error {
+	url := fmt.Sprintf("%s/api/test/gatekeeper", c.httpBaseURL)
+	body := map[string]interface{}{"rate_limit_rps": float64(rps)}
+	data, _ := json.Marshal(body)
+	resp, err := c.httpClient.Post(url, "application/json", bytes.NewBuffer(data))
+	if err != nil { return err }
+	resp.Body.Close()
+	return nil
+}
+
+func (c *testContext) messagesArePushedRapidlyViaPOST(count int, path string) error {
+	url := fmt.Sprintf("%s%s", c.httpBaseURL, path)
+	c.lastError = nil
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	statusCodes := []int{}
+
+	for i := 0; i < count; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			msg := models.Message[any]{ID: fmt.Sprintf("RATE-%d", idx), Payload: "RateTest"}
+			data, _ := json.Marshal(msg)
+			resp, err := http.Post(url, "application/json", bytes.NewBuffer(data))
+			mu.Lock()
+			if err == nil {
+				statusCodes = append(statusCodes, resp.StatusCode)
+				resp.Body.Close()
+			}
+			mu.Unlock()
+		}(i)
+	}
+	wg.Wait()
+	
+	// Store codes for the next step
+	c.mu.Lock()
+	c.receivedMsg.Headers = statusCodes // Hack: reuse Headers field to store status codes for check
+	c.mu.Unlock()
+	return nil
+}
+
+func (c *testContext) atLeastOneRequestShouldFailWithStatus(expectedStatus int) error {
+	c.mu.Lock()
+	codes := c.receivedMsg.Headers.([]int)
+	c.mu.Unlock()
+	
+	found := false
+	for _, code := range codes {
+		if code == expectedStatus {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("expected at least one status %d, but got %v", expectedStatus, codes)
+	}
+	return nil
+}
+
+func (c *testContext) theConfigurationHasMaxPayloadSizeSetToBytes(size int) error {
+	url := fmt.Sprintf("%s/api/test/gatekeeper", c.httpBaseURL)
+	body := map[string]interface{}{"max_payload_size": int64(size)}
+	data, _ := json.Marshal(body)
+	resp, err := c.httpClient.Post(url, "application/json", bytes.NewBuffer(data))
+	if err != nil { return err }
+	resp.Body.Close()
+	return nil
+}
+
+func (c *testContext) aMessageWithPayloadSizeBytesIsPushedViaPOST(size int, path string) error {
+	url := fmt.Sprintf("%s%s", c.httpBaseURL, path)
+	largePayload := strings.Repeat("A", size)
+	msg := models.Message[any]{ID: "LARGE-MSG", Payload: largePayload}
+	data, _ := json.Marshal(msg)
+	
+	resp, err := c.httpClient.Post(url, "application/json", bytes.NewBuffer(data))
+	if err != nil {
+		c.lastError = err
+		return nil // expected error might be here
+	}
+	c.lastResp = resp
+	return nil
+}
+
+func (c *testContext) theConfigurationHasAllowedDomainsSetTo(domainsStr string) error {
+	// Parse ["d1", "d2"]
+	s := strings.Trim(domainsStr, "[]")
+	parts := strings.Split(s, ",")
+	domains := []string{}
+	for _, p := range parts {
+		domains = append(domains, strings.Trim(strings.TrimSpace(p), "\""))
+	}
+
+	url := fmt.Sprintf("%s/api/test/gatekeeper", c.httpBaseURL)
+	body := map[string]interface{}{"allowed_domains": domains}
+	data, _ := json.Marshal(body)
+	resp, err := c.httpClient.Post(url, "application/json", bytes.NewBuffer(data))
+	if err != nil { return err }
+	resp.Body.Close()
+	return nil
+}
+
+func (c *testContext) aTargetIsRegisteredWithURL(targetURL string) error {
+	url := fmt.Sprintf("%s/api/targets", c.httpBaseURL)
+	body := map[string]string{"name": "SSRF-Target", "url": targetURL}
+	data, _ := json.Marshal(body)
+	
+	resp, err := c.httpClient.Post(url, "application/json", bytes.NewBuffer(data))
+	if err != nil {
+		c.lastError = err
+		return nil
+	}
+	c.lastResp = resp
+	return nil
+}
+
+func (c *testContext) theRegistrationShouldBeRejected() error {
+	if c.lastResp == nil || (c.lastResp.StatusCode != http.StatusForbidden && c.lastResp.StatusCode != http.StatusBadRequest) {
+		status := 0
+		if c.lastResp != nil { status = c.lastResp.StatusCode }
+		return fmt.Errorf("expected registration to be rejected (403/400), got %d", status)
+	}
+	return nil
+}
+
+func (c *testContext) theConfigurationHasMaxQueueSizeSetTo(size int) error {
+	url := fmt.Sprintf("%s/api/test/gatekeeper", c.httpBaseURL)
+	body := map[string]interface{}{"max_queue_size": size}
+	data, _ := json.Marshal(body)
+	resp, err := c.httpClient.Post(url, "application/json", bytes.NewBuffer(data))
+	if err != nil { return err }
+	resp.Body.Close()
+	return nil
+}
+
+func (c *testContext) messagesArePushedAnd(id1, id2 string) error {
+	if err := c.aProducerPushesAMessageWithPayload(id1, "data1"); err != nil { return err }
+	return c.aProducerPushesAMessageWithPayload(id2, "data2")
+}
+
+func (c *testContext) aThirdMessageIsPushed(id3 string) error {
+	return c.aProducerPushesAMessageWithPayload(id3, "data3")
+}
+
+func (c *testContext) theThirdPushShouldFailWithError(id3, errMsg string) error {
+	if c.lastResp.StatusCode != http.StatusInternalServerError {
+		return fmt.Errorf("expected 500 for queue full, got %d", c.lastResp.StatusCode)
+	}
+	body, _ := io.ReadAll(c.lastResp.Body)
+	if !strings.Contains(string(body), errMsg) {
+		return fmt.Errorf("expected error containing '%s', got '%s'", errMsg, string(body))
+	}
+	return nil
+}
+
 func InitializeScenario(sc *godog.ScenarioContext) {
 	tc := &testContext{}
 
@@ -1446,6 +1631,23 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 	sc.Step(`^the producer sends message "([^"]*)" with payload "([^"]*)" via gRPC$`, tc.theProducerSendsMessageViaGRPC)
 	sc.Step(`^when the consumer requests a message via gRPC$`, tc.whenTheConsumerRequestsAMessageViaGRPC)
 	sc.Step(`^the consumer should receive message "([^"]*)" via gRPC$`, tc.theConsumerShouldReceiveMessageViaGRPC)
+	sc.Step(`^the consumer acknowledges message "([^"]*)" via gRPC$`, tc.theConsumerAcknowledgesMessageViaGRPC)
+	sc.Step(`^the consumer acknowledges message "([^"]*)"$`, tc.theConsumerAcknowledgesMessage)
+	sc.Step(`^the consumer acknowledges message "([^"]*)" via POST "([^"]*)"$`, tc.theConsumerAcknowledgesMessageViaPOST)
+
+	// Gatekeeper & Stability
+	sc.Step(`^the configuration has rate limit set to (\d+) RPS with burst (\d+)$`, tc.theConfigurationHasRateLimitSetToRPSWithBurst)
+	sc.Step(`^(\d+) messages are pushed rapidly via POST "([^"]*)"$`, tc.messagesArePushedRapidlyViaPOST)
+	sc.Step(`^at least one request should fail with status (\d+)$`, tc.atLeastOneRequestShouldFailWithStatus)
+	sc.Step(`^the configuration has max payload size set to (\d+) bytes$`, tc.theConfigurationHasMaxPayloadSizeSetToBytes)
+	sc.Step(`^a message with payload size (\d+) bytes is pushed via POST "([^"]*)"$`, tc.aMessageWithPayloadSizeBytesIsPushedViaPOST)
+	sc.Step(`^the configuration has allowed domains set to \[([^\]]*)\]$`, tc.theConfigurationHasAllowedDomainsSetTo)
+	sc.Step(`^when a target is registered with URL "([^"]*)"$`, tc.aTargetIsRegisteredWithURL)
+	sc.Step(`^the registration should be rejected$`, tc.theRegistrationShouldBeRejected)
+	sc.Step(`^the configuration has max queue size set to (\d+)$`, tc.theConfigurationHasMaxQueueSizeSetTo)
+	sc.Step(`^(\d+) messages are pushed "([^"]*)" and "([^"]*)"$`, tc.messagesArePushedAnd)
+	sc.Step(`^a third message "([^"]*)" is pushed$`, tc.aThirdMessageIsPushed)
+	sc.Step(`^the third push "([^"]*)" should fail with "([^"]*)" error$`, tc.theThirdPushShouldFailWithError)
 
 	sc.Step(`^the producer sends message "([^"]*)" with payload "([^"]*)" via POST "([^"]*)"$`, tc.theProducerSendsMessageViaPOST)
 	sc.Step(`^the server should respond with status (\d+)$`, tc.theServerShouldRespondWithStatus)

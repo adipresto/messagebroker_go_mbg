@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             v5.29.3
-// source: api/proto/broker.proto
+// source: proto/proto/broker.proto
 
 package proto
 
@@ -21,6 +21,8 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	BrokerService_Push_FullMethodName = "/broker.BrokerService/Push"
 	BrokerService_Pop_FullMethodName  = "/broker.BrokerService/Pop"
+	BrokerService_Ack_FullMethodName  = "/broker.BrokerService/Ack"
+	BrokerService_Nack_FullMethodName = "/broker.BrokerService/Nack"
 )
 
 // BrokerServiceClient is the client API for BrokerService service.
@@ -29,6 +31,8 @@ const (
 type BrokerServiceClient interface {
 	Push(ctx context.Context, in *PushRequest, opts ...grpc.CallOption) (*PushResponse, error)
 	Pop(ctx context.Context, in *PopRequest, opts ...grpc.CallOption) (*PopResponse, error)
+	Ack(ctx context.Context, in *AckRequest, opts ...grpc.CallOption) (*AckResponse, error)
+	Nack(ctx context.Context, in *NackRequest, opts ...grpc.CallOption) (*NackResponse, error)
 }
 
 type brokerServiceClient struct {
@@ -59,12 +63,34 @@ func (c *brokerServiceClient) Pop(ctx context.Context, in *PopRequest, opts ...g
 	return out, nil
 }
 
+func (c *brokerServiceClient) Ack(ctx context.Context, in *AckRequest, opts ...grpc.CallOption) (*AckResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AckResponse)
+	err := c.cc.Invoke(ctx, BrokerService_Ack_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *brokerServiceClient) Nack(ctx context.Context, in *NackRequest, opts ...grpc.CallOption) (*NackResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(NackResponse)
+	err := c.cc.Invoke(ctx, BrokerService_Nack_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BrokerServiceServer is the server API for BrokerService service.
 // All implementations must embed UnimplementedBrokerServiceServer
 // for forward compatibility.
 type BrokerServiceServer interface {
 	Push(context.Context, *PushRequest) (*PushResponse, error)
 	Pop(context.Context, *PopRequest) (*PopResponse, error)
+	Ack(context.Context, *AckRequest) (*AckResponse, error)
+	Nack(context.Context, *NackRequest) (*NackResponse, error)
 	mustEmbedUnimplementedBrokerServiceServer()
 }
 
@@ -80,6 +106,12 @@ func (UnimplementedBrokerServiceServer) Push(context.Context, *PushRequest) (*Pu
 }
 func (UnimplementedBrokerServiceServer) Pop(context.Context, *PopRequest) (*PopResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Pop not implemented")
+}
+func (UnimplementedBrokerServiceServer) Ack(context.Context, *AckRequest) (*AckResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Ack not implemented")
+}
+func (UnimplementedBrokerServiceServer) Nack(context.Context, *NackRequest) (*NackResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Nack not implemented")
 }
 func (UnimplementedBrokerServiceServer) mustEmbedUnimplementedBrokerServiceServer() {}
 func (UnimplementedBrokerServiceServer) testEmbeddedByValue()                       {}
@@ -138,6 +170,42 @@ func _BrokerService_Pop_Handler(srv interface{}, ctx context.Context, dec func(i
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BrokerService_Ack_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AckRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BrokerServiceServer).Ack(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BrokerService_Ack_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BrokerServiceServer).Ack(ctx, req.(*AckRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BrokerService_Nack_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(NackRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BrokerServiceServer).Nack(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BrokerService_Nack_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BrokerServiceServer).Nack(ctx, req.(*NackRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BrokerService_ServiceDesc is the grpc.ServiceDesc for BrokerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -153,7 +221,15 @@ var BrokerService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "Pop",
 			Handler:    _BrokerService_Pop_Handler,
 		},
+		{
+			MethodName: "Ack",
+			Handler:    _BrokerService_Ack_Handler,
+		},
+		{
+			MethodName: "Nack",
+			Handler:    _BrokerService_Nack_Handler,
+		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "api/proto/broker.proto",
+	Metadata: "proto/proto/broker.proto",
 }

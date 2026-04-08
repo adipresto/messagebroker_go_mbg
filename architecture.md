@@ -94,4 +94,6 @@ sequenceDiagram
 - **Zero-Block Dispatcher**: Logika pengiriman dipisahkan dari I/O persistensi guna menghilangkan *lag* pengiriman.
 - **SQLite WAL (Write-Ahead Logging)**: Menjamin konkurensi throughput pembacaan metrik dan penulisan pesan.
 - **Circuit Breaker Integration**: Melindungi sistem dari target yang *unresponsive* melalui mekanisme proteksi asinkron.
-- **Planned: Gatekeeper Layer (v0.11.0)**: Penambahan middleware untuk API Key validation, Rate Limiting, dan SSRF protection guna mengamankan broker saat diakses dari endpoint publik.
+- **Planned: Gatekeeper Layer (v0.11.0)**: Penambahan middleware untuk Rate Limiting, Max Payload Size, dan SSRF protection guna mencegah serangan DoS (Resource Exhaustion) dari akses publik.
+- **Planned: Acknowledge (ACK/NACK) Mechanism**: Mencegah hilangnya iterasi pesan akibat koneksi terputus saat *consumer* melakukan *Pull* (`Pop`).
+- **Planned: Fixed-Size Buffer**: Membatasi batas maksimum memori antrean sebagai kontrol terakhir pencegahan OOM.
